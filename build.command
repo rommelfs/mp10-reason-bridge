@@ -12,4 +12,4 @@ xcrun lipo -create "$build_dir/bridge-arm64" "$build_dir/bridge-x86_64" -output 
 cp Info.plist "$app/Contents/Info.plist"
 codesign --force --sign - "$app"
 "$app/Contents/MacOS/MP10ReasonBridge" --self-test
-printf 'Fertig: %s/%s\n' "$PWD" "$app"
+printf 'Built: %s/%s\n' "$PWD" "$app"

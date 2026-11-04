@@ -17,13 +17,13 @@ Download the app ZIP from [Releases](https://github.com/rommelfs/mp10-reason-bri
 
 The app is ad-hoc signed, **not Apple-notarized**. If macOS blocks it as an unidentified developer, review the app and use **System Settings → Privacy & Security → Open Anyway** if appropriate.
 
-The current app interface is in German. The instructions below include the relevant labels.
+Version 1.2 uses English throughout the interface, status messages, logs, and test output. Quit an older bridge before replacing it with the new app. Existing custom mappings and MIDI port names are preserved.
 
 ## Connect the MP10
 
 1. Connect the MP10 to your Mac.
 2. Start the bridge before opening Reason.
-3. Choose the MP10's input in **MIDI-Eingang** (MIDI input). If using a MIDI interface, choose its corresponding port. Click **Aktualisieren** (Refresh) if needed.
+3. Choose the MP10's input in **MIDI Input**. If using a MIDI interface, choose its corresponding port. Click **Refresh** if needed.
 4. Enable **TRANSPORT** on the MP10.
 5. Press a transport button. The log should show an `IN` message with the decoded command and an `OUT` message with the generated note.
 
@@ -31,7 +31,7 @@ The MP10's button assignments are configurable under **MIDI EDIT → MMC**; see 
 
 ## Set up Reason 14 with Mackie Control
 
-The default **Ausgangsmodus** (output mode) is **Mackie Control (MCU)**. Later mode selections are remembered.
+The default **Output mode** is **Mackie Control (MCU)**. Later mode selections are remembered.
 
 1. Open **Reason → Settings → MIDI**.
 2. If an older bridge configuration exists, remove its generic controller entry. Keep your actual MP10 keyboard entry.
@@ -74,17 +74,17 @@ Play release:  90 5E 00
 
 The channel and notes are fixed in MCU mode. These values are protocol button IDs; they do not represent musical pitches here.
 
-MMC Record Exit, Record Pause, Pause, Eject, Chase, Command Error Reset, and MMC Reset have no mapping in this mode. Their fields show `—`, their **Senden** (Send) buttons are disabled, and incoming messages are logged and ignored. No unrelated MCU buttons are substituted for them.
+MMC Record Exit, Record Pause, Pause, Eject, Chase, Command Error Reset, and MMC Reset have no mapping in this mode. Their fields show `—`, their **Send** buttons are disabled, and incoming messages are logged and ignored. No unrelated MCU buttons are substituted for them.
 
 ### Host return path and handshake
 
-`MP10 Reason Bridge Feedback` receives host messages separately from the MP10 input. For model ID `14` hex, the bridge handles Device Query, Host Connection Reply, Firmware Version Request, and Reset, using the virtual serial identifier `MP10BRG`. Connection replies appear in the log as `MCU-Handshake`.
+`MP10 Reason Bridge Feedback` receives host messages separately from the MP10 input. For model ID `14` hex, the bridge handles Device Query, Host Connection Reply, Firmware Version Request, and Reset, using the virtual serial identifier `MP10BRG`. Connection replies appear in the log as `MCU handshake`.
 
 LED, display, and fader feedback is ignored. It is never echoed as a button press, and it is not forwarded to the MP10.
 
 ## Custom MIDI-note mode
 
-Choose **Freie MIDI-Noten** (Custom MIDI notes) to assign any note number from 0–127 to each of the 16 recognized commands. The output channel is selectable from 1–16.
+Choose **Custom MIDI notes** to assign any note number from 0–127 to each of the 16 recognized commands. The output channel is selectable from 1–16.
 
 Existing custom assignments are preserved when switching to MCU mode and restored when switching back. Settings are stored locally using macOS user defaults. Press Enter, trigger a command, switch modes, or quit normally to save edited note values.
 
@@ -95,7 +95,7 @@ To use this mode in Reason:
 1. Disable or remove the Mackie entry using the bridge port.
 2. Add **Other → MIDI Control Keyboard**, using `MP10 Reason Bridge` as input and no MIDI output. Use a model with a keyboard so that notes are available as controls.
 3. Right-click / Control-click a Reason transport control and choose **Edit Remote Override Mapping**.
-4. Enable **Learn From Control Surface Input**, then press the MP10 button or the corresponding **Senden** button in the bridge.
+4. Enable **Learn From Control Surface Input**, then press the MP10 button or the corresponding **Send** button in the bridge.
 5. If learning does not select the note, manually choose the bridge surface, **Keyboard**, and the note number.
 6. Save the Reason song. Remote Overrides are stored with the song; save a template if you want them in new songs.
 
@@ -107,7 +107,7 @@ Use different notes for commands that should be distinguishable. Octave labels d
 - Keyboard notes, CC messages, MIDI Clock, and unrelated SysEx are not passed through. Route your MP10 keyboard directly to Reason as before.
 - MMC input accepts any device ID from 0–127. The bridge parses simple six-byte MMC commands `01`–`0D`, including messages fragmented across MIDI packets.
 - The bridge does not reflect Reason's playback state or LEDs on the MP10.
-- If no input appears, check the connection, select the correct input, and click **Aktualisieren**.
+- If no input appears, check the connection, select the correct input, and click **Refresh**.
 - If transport events do not appear in the log, check **TRANSPORT** and the MP10's MMC assignments.
 - If Reason cannot see a virtual port, start the bridge first and reopen Reason if needed. Check the bridge's status line for CoreMIDI errors.
 - If notes sound instead of controlling transport, check that the bridge mode matches the Reason controller setup and that the actual MP10 remains the master keyboard.

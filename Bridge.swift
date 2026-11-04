@@ -80,7 +80,7 @@ struct MCUHandshake {
    return header + [valid ? 3 : 4] + serial + [0xF7]
   }
   if command == 0x13 && message == header + [0x13, 0, 0xF7] {
-   return header + [0x14] + Array("V1.1 ".utf8) + [0xF7]
+   return header + [0x14] + Array("V1.2 ".utf8) + [0xF7]
   }
   if message == header + [0x0F, 0x7F, 0xF7] { awaitingReply = false }
   return nil
@@ -126,7 +126,7 @@ struct Parser {
  }
 }
 func check(_ status: OSStatus, _ action: String) throws {
- if status != noErr { throw NSError(domain: "CoreMIDI", code: Int(status), userInfo: [NSLocalizedDescriptionKey:"\(action): CoreMIDI-Fehler \(status)"]) }
+ if status != noErr { throw NSError(domain: "CoreMIDI", code: Int(status), userInfo: [NSLocalizedDescriptionKey:"\(action): CoreMIDI error \(status)"]) }
 }
 
 final class Bridge: NSObject, NSApplicationDelegate {
@@ -158,19 +158,19 @@ final class Bridge: NSObject, NSApplicationDelegate {
    try check(MIDIClientCreateWithBlock("MP10 Reason Bridge" as CFString, &client) { [weak self] notification in
     let id = notification.pointee.messageID
     if id == .msgSetupChanged { DispatchQueue.main.async { self?.refresh(nil) } }
-   }, "MIDI-Client erstellen")
-   try check(MIDISourceCreate(client,"MP10 Reason Bridge" as CFString,&output),"Virtuellen Ausgang erstellen")
-   try check(MIDIInputPortCreateWithBlock(client,"MP10 Eingang" as CFString,&port) { [weak self] list, _ in
+   }, "Create MIDI client")
+   try check(MIDISourceCreate(client,"MP10 Reason Bridge" as CFString,&output),"Create virtual output")
+   try check(MIDIInputPortCreateWithBlock(client,"MP10 Input" as CFString,&port) { [weak self] list, _ in
     let bytes = packetBytes(list)
     DispatchQueue.main.async { self?.receive(bytes) }
-   },"MIDI-Eingang erstellen")
+   },"Create MIDI input")
    try check(MIDIDestinationCreateWithBlock(client,"MP10 Reason Bridge Feedback" as CFString,&feedback) { [weak self] list, _ in
     let bytes = packetBytes(list)
     DispatchQueue.main.async { self?.receiveHost(bytes) }
-   }, "Virtuellen Rückkanal erstellen")
+   }, "Create virtual feedback input")
    enabled = true
    refresh(nil)
-   append("Bereit. Ausgang: MP10 Reason Bridge. Nur Transportbefehle werden weitergegeben.")
+   append("Ready. Output: MP10 Reason Bridge. Only transport commands are translated.")
   } catch { status.stringValue = error.localizedDescription; append(error.localizedDescription) }
   window.makeKeyAndOrderFront(nil)
   NSApp.activate(ignoringOtherApps: true)
@@ -184,19 +184,19 @@ final class Bridge: NSObject, NSApplicationDelegate {
    let l = NSTextField(labelWithString:text); l.frame = NSRect(x:x,y:y,width:w,height:22); view.addSubview(l)
   }
   label("MP10 → Reason",20,802,400)
-  label("MIDI-Eingang",20,763,110)
+  label("MIDI Input",20,763,110)
   input.frame = NSRect(x:135,y:759,width:410,height:28); input.target=self; input.action=#selector(selectInput); view.addSubview(input)
-  let refresh = NSButton(title:"Aktualisieren",target:self,action:#selector(refresh(_:))); refresh.frame=NSRect(x:550,y:759,width:140,height:28);view.addSubview(refresh)
+  let refresh = NSButton(title:"Refresh",target:self,action:#selector(refresh(_:))); refresh.frame=NSRect(x:550,y:759,width:140,height:28);view.addSubview(refresh)
   label("Reason MIDI In: MP10 Reason Bridge",20,726,670)
   label("Reason MIDI Out: MP10 Reason Bridge Feedback",20,704,670)
-  label("Ausgangsmodus",20,676,130)
+  label("Output mode",20,676,130)
   modeSelector.frame=NSRect(x:150,y:672,width:285,height:28)
-  modeSelector.addItems(withTitles:["Mackie Control (MCU)","Freie MIDI-Noten"])
+  modeSelector.addItems(withTitles:["Mackie Control (MCU)","Custom MIDI notes"])
   modeSelector.selectItem(at:defaults.integer(forKey:"outputMode") == 1 ? 1 : 0)
   modeSelector.target=self;modeSelector.action=#selector(changeMode);view.addSubview(modeSelector)
-  label("MIDI-Kanal",450,676,100)
+  label("MIDI channel",450,676,100)
   channel.frame=NSRect(x:550,y:672,width:130,height:28);channel.addItems(withTitles:(1...16).map(String.init));channel.selectItem(at:max(0,min(15,defaults.integer(forKey:"channel"))));channel.target=self;channel.action=#selector(saveChannel);view.addSubview(channel)
-  label("Befehl",20,644,300);label("Notennummer (0–127)",350,644,210)
+  label("Command",20,644,300);label("Note number (0–127)",350,644,210)
   label("Test",600,644,75)
   for (index,item) in commands.enumerated() {
    let y = CGFloat(615-index*26)
@@ -205,7 +205,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
    let key="note.\(item.0)"
    field.integerValue=defaults.object(forKey:key) == nil ? defaultNote(item.0) : defaults.integer(forKey:key)
    field.tag=item.0;field.target=self;field.action=#selector(saveNote(_:));view.addSubview(field);fields[item.0]=field
-   let button=NSButton(title:"Senden",target:self,action:#selector(testNote(_:)));button.tag=item.0;button.frame=NSRect(x:590,y:y-1,width:90,height:25);view.addSubview(button);testButtons[item.0]=button
+   let button=NSButton(title:"Send",target:self,action:#selector(testNote(_:)));button.tag=item.0;button.frame=NSRect(x:590,y:y-1,width:90,height:25);view.addSubview(button);testButtons[item.0]=button
   }
   modeHint.frame=NSRect(x:20,y:183,width:670,height:22);view.addSubview(modeHint)
   pulseHint.frame=NSRect(x:20,y:160,width:670,height:22);view.addSubview(pulseHint)
@@ -216,7 +216,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
   log.isEditable=false;log.isSelectable=true;log.font=NSFont.monospacedSystemFont(ofSize:11,weight:.regular)
   log.autoresizingMask=[.width];log.textContainer?.widthTracksTextView=true
   scroll.documentView=log;view.addSubview(scroll)
-  let menu=NSMenu();let item=NSMenuItem();menu.addItem(item);let appMenu=NSMenu();appMenu.addItem(withTitle:"MP10 Reason Bridge beenden",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q");item.submenu=appMenu;NSApp.mainMenu=menu
+  let menu=NSMenu();let item=NSMenuItem();menu.addItem(item);let appMenu=NSMenu();appMenu.addItem(withTitle:"Quit MP10 Reason Bridge",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q");item.submenu=appMenu;NSApp.mainMenu=menu
  }
  func saveCustomNotes() {
   guard mode == .custom else { return }
@@ -231,7 +231,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
   defaults.set(mode.rawValue,forKey:"outputMode")
   hostParser=SysExStream();handshake=MCUHandshake()
   updateModeUI()
-  append(mode == .mcu ? "MCU: Kanal 1, Velocity 127/0. In Reason Mackie > Control wählen." : "Freie Notenzuordnung aktiviert.")
+  append(mode == .mcu ? "MCU: Channel 1, velocity 127/0. Select Mackie > Control in Reason." : "Custom MIDI note mapping enabled.")
  }
  func updateModeUI() {
   channel.isEnabled = mode == .custom
@@ -246,15 +246,15 @@ final class Bridge: NSObject, NSApplicationDelegate {
    }
    testButtons[command]?.isEnabled = mode == .custom || mcuNote(command) != nil
   }
-  modeHint.stringValue = mode == .mcu ? "MCU: Rückspulen 91 · Vorspulen 92 · Stop 93 · Play 94 · Record 95" : "Freie Noten: bestehende eigene Belegung bleibt erhalten."
-  pulseHint.stringValue = mode == .mcu ? "Kanal 1 · Note On 127 → nach 80 ms Note On 0 · — bedeutet unbelegt." : "Note On 100 → nach 80 ms Note Off 0 · MIDI-Kanal frei wählbar."
+  modeHint.stringValue = mode == .mcu ? "MCU: Rewind 91 · Fast Forward 92 · Stop 93 · Play 94 · Record 95" : "Custom notes: your existing assignments are preserved."
+  pulseHint.stringValue = mode == .mcu ? "Channel 1 · Note On 127 → Note On 0 after 80 ms · — means unassigned." : "Note On 100 → Note Off 0 after 80 ms · Select any MIDI channel."
  }
  func receiveHost(_ bytes:[UInt8]) {
   guard mode == .mcu else { return }
   for message in hostParser.feed(bytes) {
    if let reply=handshake.reply(to:message) {
     send(reply)
-    append("MCU-Handshake: Antwort \(reply.map {String(format:"%02X",$0)}.joined(separator:" "))")
+    append("MCU handshake: reply \(reply.map {String(format:"%02X",$0)}.joined(separator:" "))")
    }
   }
  }
@@ -267,38 +267,38 @@ final class Bridge: NSObject, NSApplicationDelegate {
  @objc func saveChannel() { defaults.set(channel.indexOfSelectedItem,forKey:"channel") }
  @objc func saveNote(_ sender:NSTextField) { if mode == .custom { _ = note(sender.tag) } }
  func note(_ command:Int) -> Int? {
-  guard let field=fields[command],let n=Int(field.stringValue.trimmingCharacters(in:.whitespaces)),(0...127).contains(n) else { append("Ungültige Notennummer: bitte eine ganze Zahl von 0 bis 127 eingeben.");return nil }
+  guard let field=fields[command],let n=Int(field.stringValue.trimmingCharacters(in:.whitespaces)),(0...127).contains(n) else { append("Invalid note number: enter a whole number from 0 to 127.");return nil }
   defaults.set(n,forKey:"note.\(command)");return n
  }
  func name(_ endpoint:MIDIEndpointRef)->String {
   var value:Unmanaged<CFString>?
   if MIDIObjectGetStringProperty(endpoint,kMIDIPropertyDisplayName,&value)==noErr,let value=value {return value.takeRetainedValue() as String}
-  return "MIDI-Eingang \(endpoint)"
+  return "MIDI Input \(endpoint)"
  }
  @objc func refresh(_ sender:Any?) {
   guard enabled else { return }
   let old=selected
   sources=(0..<MIDIGetNumberOfSources()).map { MIDIGetSource($0) }.filter { $0 != output && $0 != 0 }
-  input.removeAllItems();input.addItem(withTitle:"— Eingang auswählen —");input.addItems(withTitles:sources.map(name))
+  input.removeAllItems();input.addItem(withTitle:"— Select input —");input.addItems(withTitles:sources.map(name))
   if let i=sources.firstIndex(of:old) { input.selectItem(at:i+1);return }
   if old != 0 { MIDIPortDisconnectSource(port,old);selected=0;parser=Parser() }
   if let i=sources.firstIndex(where:{name($0).localizedCaseInsensitiveContains("MP10")}) {input.selectItem(at:i+1);selectInput()}
-  else {status.stringValue="Bitte den MIDI-Port deines MP10 auswählen."}
+  else {status.stringValue="Select your MP10 MIDI input port."}
  }
  @objc func selectInput() {
   if selected != 0 {MIDIPortDisconnectSource(port,selected)}
   selected=0;parser=Parser()
   let index=input.indexOfSelectedItem-1
-  guard sources.indices.contains(index) else {status.stringValue="Kein MIDI-Eingang verbunden.";return}
+  guard sources.indices.contains(index) else {status.stringValue="No MIDI input connected.";return}
   let endpoint=sources[index]
   let result=MIDIPortConnectSource(port,endpoint,nil)
-  if result == noErr {selected=endpoint;status.stringValue="Verbunden: \(name(endpoint))";append(status.stringValue)}
-  else {status.stringValue="Verbindung fehlgeschlagen: \(result)";append(status.stringValue)}
+  if result == noErr {selected=endpoint;status.stringValue="Connected: \(name(endpoint))";append(status.stringValue)}
+  else {status.stringValue="Connection failed: \(result)";append(status.stringValue)}
  }
  func receive(_ bytes:[UInt8]) {
   guard selected != 0 else {return}
   for (command,raw) in parser.feed(bytes) {
-   let title=commands.first {$0.0==command}?.1 ?? "Unbekannt"
+   let title=commands.first {$0.0==command}?.1 ?? "Unknown"
    append("IN \(raw.map {String(format:"%02X",$0)}.joined(separator:" ")) · \(title)")
    trigger(command)
   }
@@ -308,7 +308,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
   guard enabled else { return }
   let custom = mode == .custom ? note(command) : nil
   guard let pulse=makePulse(command:command,mode:mode,customNote:custom,channel:channel.indexOfSelectedItem) else {
-   if mode == .mcu { append("MCU: Dieser MMC-Befehl hat keine Zuordnung und wird ignoriert.") }
+   if mode == .mcu { append("MCU: This MMC command is unassigned and will be ignored.") }
    return
   }
   let key=pulse.key
@@ -317,7 +317,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
   pulseGeneration[key,default:0] += 1
   let generation=pulseGeneration[key]!
   send(pulse.press)
-  append("OUT \(mode == .mcu ? "MCU" : "Note") \(pulse.press[1]), Kanal \(Int(pulse.press[0] & 0x0F)+1), Velocity \(pulse.press[2])")
+  append("OUT \(mode == .mcu ? "MCU" : "Note") \(pulse.press[1]), channel \(Int(pulse.press[0] & 0x0F)+1), Velocity \(pulse.press[2])")
   DispatchQueue.main.asyncAfter(deadline:.now()+0.08) { [weak self] in
    guard let self=self,self.pulseGeneration[key]==generation else {return}
    self.send(pulse.release);self.activeReleases.removeValue(forKey:key)
@@ -333,7 +333,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
     return MIDIReceived(output,pointer)
    }
   }
-  if result != noErr {append("Senden fehlgeschlagen: \(result)")}
+  if result != noErr {append("Send failed: \(result)")}
  }
  func append(_ message:String) {
   logLines.append(message);if logLines.count>150 {logLines.removeFirst(logLines.count-150)}
@@ -394,7 +394,7 @@ func selfTest() {
  precondition(h.reply(to:hdr+[2]+serial+[0,0,0,0,0xF7]) == hdr+[4]+serial+[0xF7])
  precondition(h.reply(to:[0xF0,0,0,0x66,0x15,0,0xF7]) == nil)
  precondition(h.reply(to:hdr+[0,1,0xF7]) == nil)
- precondition(h.reply(to:hdr+[0x13,0,0xF7]) == hdr+[0x14]+Array("V1.1 ".utf8)+[0xF7])
+ precondition(h.reply(to:hdr+[0x13,0,0xF7]) == hdr+[0x14]+Array("V1.2 ".utf8)+[0xF7])
  _ = h.reply(to:hdr+[0x63,0xF7])
  precondition(h.awaitingReply)
  _ = h.reply(to:hdr+[0x0F,0x7F,0xF7])
@@ -403,7 +403,7 @@ func selfTest() {
  precondition(stream.feed([0x90,94,127]+Array(hdr.prefix(3))).isEmpty)
  precondition(stream.feed(Array(hdr.dropFirst(3))+[0xF8,0,0xF7]) == [hdr+[0,0xF7]])
  precondition(stream.feed(hdr+[0,0xF7]+hdr+[0x13,0,0xF7]).count == 2)
- print("PASS: MMC-Parser, alle MCU-Zuordnungen, exakte Press/Release-Bytes, freie Noten/Kanäle, unbelegte Befehle, MCU-Handshake, ungültige/stale Antworten und getrennter SysEx-Rückkanal.")
+ print("PASS: MMC parser, all MCU mappings, exact press/release bytes, custom notes/channels, unassigned commands, MCU handshake, invalid/stale replies, and separate SysEx feedback stream.")
 
 }
 func integrationTest() throws {
@@ -414,14 +414,14 @@ func integrationTest() throws {
  bridge.defaults = UserDefaults(suiteName:suite)!
  defer {bridge.defaults.removePersistentDomain(forName:suite)}
  bridge.applicationDidFinishLaunching(Notification(name:NSApplication.didFinishLaunchingNotification))
- guard bridge.enabled else {throw NSError(domain:"Test",code:1,userInfo:[NSLocalizedDescriptionKey:"CoreMIDI konnte nicht gestartet werden: \(bridge.status.stringValue)"])}
+ guard bridge.enabled else {throw NSError(domain:"Test",code:1,userInfo:[NSLocalizedDescriptionKey:"Could not start CoreMIDI: \(bridge.status.stringValue)"])}
  bridge.window.orderOut(nil)
  var testClient=MIDIClientRef(), fake=MIDIEndpointRef(), receiver=MIDIPortRef()
- try check(MIDIClientCreateWithBlock("Bridge Test" as CFString,&testClient,nil),"Test-Client")
+ try check(MIDIClientCreateWithBlock("Bridge Test" as CFString,&testClient,nil),"Test client")
  defer {MIDIClientDispose(testClient);MIDIClientDispose(bridge.client)}
- try check(MIDISourceCreate(testClient,"MP10 Test Source" as CFString,&fake),"Test-Eingang")
+ try check(MIDISourceCreate(testClient,"MP10 Test Source" as CFString,&fake),"Test input")
  var received:[UInt8]=[]
- try check(MIDIInputPortCreateWithBlock(testClient,"Test Empfänger" as CFString,&receiver) { list,_ in
+ try check(MIDIInputPortCreateWithBlock(testClient,"Test Receiver" as CFString,&receiver) { list,_ in
   var collected:[UInt8]=[]
   var packet=UnsafeRawPointer(list).advanced(by:MemoryLayout<MIDIPacketList>.offset(of: \.packet)!).assumingMemoryBound(to:MIDIPacket.self)
   for _ in 0..<list.pointee.numPackets {
@@ -430,10 +430,10 @@ func integrationTest() throws {
    packet=UnsafePointer(MIDIPacketNext(packet))
   }
   DispatchQueue.main.async {received.append(contentsOf:collected)}
- },"Test-Empfänger")
- try check(MIDIPortConnectSource(receiver,bridge.output,nil),"Test-Ausgang verbinden")
+ },"Test receiver")
+ try check(MIDIPortConnectSource(receiver,bridge.output,nil),"Connect test output")
  bridge.refresh(nil)
- guard let index=bridge.sources.firstIndex(of:fake) else {fatalError("Testquelle fehlt")}
+ guard let index=bridge.sources.firstIndex(of:fake) else {fatalError("Test source missing")}
  bridge.input.selectItem(at:index+1);bridge.selectInput()
  // Two packets in one callback exercise packet traversal and fragmented SysEx.
  var list=MIDIPacketList()
@@ -446,7 +446,7 @@ func integrationTest() throws {
  }
  let deadline=Date().addingTimeInterval(2)
  while received.count<6 && Date()<deadline {RunLoop.current.run(until:Date().addingTimeInterval(0.02))}
- precondition(received == [0x90,94,127,0x90,94,0],"Unerwarteter MCU-Ausgang: \(received)")
+ precondition(received == [0x90,94,127,0x90,94,0],"Unexpected MCU output: \(received)")
  received=[]
  bridge.modeSelector.selectItem(at:1);bridge.changeMode()
  bridge.channel.selectItem(at:15)
@@ -454,13 +454,13 @@ func integrationTest() throws {
  bridge.trigger(2)
  let customDeadline=Date().addingTimeInterval(2)
  while received.count<6 && Date()<customDeadline {RunLoop.current.run(until:Date().addingTimeInterval(0.02))}
- precondition(received == [0x9F,77,100,0x8F,77,0],"Unerwarteter freier Ausgang: \(received)")
+ precondition(received == [0x9F,77,100,0x8F,77,0],"Unexpected custom output: \(received)")
  received=[]
  bridge.modeSelector.selectItem(at:0);bridge.changeMode()
  precondition(bridge.fields[2]!.stringValue == "94")
  precondition(bridge.defaults.integer(forKey:"note.2") == 77)
  var hostPort=MIDIPortRef()
- try check(MIDIOutputPortCreate(testClient,"Test Host Ausgang" as CFString,&hostPort),"Host-Ausgang")
+ try check(MIDIOutputPortCreate(testClient,"Test Host Output" as CFString,&hostPort),"Host output")
  func sendHost(_ bytes:[UInt8]) {
   var hostList=MIDIPacketList()
   withUnsafeMutablePointer(to:&hostList) { pointer in
@@ -485,7 +485,7 @@ func integrationTest() throws {
  precondition(received == handshake.header+[3]+handshake.serial+[0xF7])
  bridge.modeSelector.selectItem(at:1);bridge.changeMode()
  precondition(bridge.fields[2]!.stringValue == "77")
- print("PASS: CoreMIDI-Eingang, fragmentiertes MMC, MCU- und freie Notenausgabe, Moduswechsel ohne Verlust, Feedback ohne Echo, MCU-Handshake über virtuelle Ports.")
+ print("PASS: CoreMIDI input, fragmented MMC, MCU and custom note output, mode switching without data loss, feedback without echo, and MCU handshake over virtual ports.")
 }
 if CommandLine.arguments.contains("--self-test") {selfTest()}
 else if CommandLine.arguments.contains("--integration-test") {
