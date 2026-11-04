@@ -1,5 +1,21 @@
 import Cocoa
 import CoreMIDI
+import Darwin
+
+// MIDIReceived delivers input from a virtual source. Unlike MIDISend, timestamp
+// zero does not mean "now" here; every generated packet needs valid host time.
+func withSourcePacket(_ bytes: [UInt8], _ deliver: (UnsafePointer<MIDIPacketList>) -> OSStatus) -> OSStatus {
+ guard !bytes.isEmpty, bytes.count <= 256 else { return OSStatus(-50) }
+ var list = MIDIPacketList()
+ return withUnsafeMutablePointer(to: &list) { pointer in
+  let packet = MIDIPacketListInit(pointer)
+  return bytes.withUnsafeBufferPointer { buffer in
+   _ = MIDIPacketListAdd(pointer, MemoryLayout<MIDIPacketList>.size, packet,
+                        mach_absolute_time(), buffer.count, buffer.baseAddress!)
+   return deliver(UnsafePointer(pointer))
+  }
+ }
+}
 
 let commands: [(Int, String)] = [
  (1,"Stop"),(2,"Play"),(3,"Deferred Play"),(4,"Fast Forward"),(5,"Rewind"),
@@ -179,7 +195,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
  }
  func buildUI() {
   window = NSWindow(contentRect:NSRect(x:0,y:0,width:710,height:840),styleMask:[.titled,.closable,.miniaturizable],backing:.buffered,defer:false)
-  window.title = "MP10 → Reason Bridge · 1.3 Diagnostic Preview"
+  window.title = "MP10 → Reason Bridge · 1.3 Diagnostic Preview 2"
   window.center()
   let view = window.contentView!
   func label(_ text:String,_ x:CGFloat,_ y:CGFloat,_ w:CGFloat) {
@@ -339,28 +355,24 @@ final class Bridge: NSObject, NSApplicationDelegate {
  }
  var pulseGeneration:[Int:Int]=[:]
  func send(_ bytes:[UInt8]) {
-  trace("BRIDGE → HOST",bytes)
-  var list=MIDIPacketList()
-  let result:OSStatus=withUnsafeMutablePointer(to:&list) { pointer in
-   let packet=MIDIPacketListInit(pointer)
-   return bytes.withUnsafeBufferPointer { buffer in
-    _ = MIDIPacketListAdd(pointer,MemoryLayout<MIDIPacketList>.size,packet,0,buffer.count,buffer.baseAddress!)
-    return MIDIReceived(output,pointer)
-   }
+  let result = withSourcePacket(bytes) { list in
+   trace("BRIDGE → HOST",bytes,hostTime:list.pointee.packet.timeStamp)
+   return MIDIReceived(output,list)
   }
   if result != noErr {append("Send failed: \(result)")}
  }
  @objc func copyLog() {
-  let report="MP10 Reason Bridge 1.3 diagnostic preview\nMode: \(modeSelector.titleOfSelectedItem ?? "unknown")\nInput: \(selected == 0 ? "none" : name(selected))\nOS: \(ProcessInfo.processInfo.operatingSystemVersionString)\nRaw entries use monotonic seconds at callback processing time, not hardware packet timestamps.\n\n" + logLines.joined(separator:"\n")
+  let report="MP10 Reason Bridge 1.3 diagnostic preview 2 (CoreMIDI timestamp fix)\nMode: \(modeSelector.titleOfSelectedItem ?? "unknown")\nInput: \(selected == 0 ? "none" : name(selected))\nOS: \(ProcessInfo.processInfo.operatingSystemVersionString)\nRaw entries use monotonic seconds at callback processing time, not hardware packet timestamps. Generated source packets carry current Mach host time.\n\n" + logLines.joined(separator:"\n")
   NSPasteboard.general.clearContents();NSPasteboard.general.setString(report,forType:.string)
  }
  @objc func clearLog() { logLines=[];log.string="" }
- func trace(_ direction:String,_ bytes:[UInt8]) {
+ func trace(_ direction:String,_ bytes:[UInt8],hostTime:MIDITimeStamp? = nil) {
   guard rawLog.state == .on,!bytes.isEmpty else { return }
   let timestamp=String(format:"%.3f",ProcessInfo.processInfo.systemUptime)
+  let packetTime=hostTime.map { " host_ticks=\($0)" } ?? ""
   for offset in stride(from:0,to:bytes.count,by:128) {
    let chunk=bytes[offset..<min(offset+128,bytes.count)]
-   append("\(timestamp) \(direction) [\(offset)..<\(offset+chunk.count) of \(bytes.count)]: \(chunk.map{String(format:"%02X",$0)}.joined(separator:" "))")
+   append("\(timestamp) \(direction)\(packetTime) [\(offset)..<\(offset+chunk.count) of \(bytes.count)]: \(chunk.map{String(format:"%02X",$0)}.joined(separator:" "))")
   }
  }
  func append(_ message:String) {
@@ -376,6 +388,29 @@ final class Bridge: NSObject, NSApplicationDelegate {
 }
 
 func selfTest() {
+ // Exercise the production packet builder, not just the MIDI payload parser.
+ let fixtures: [[UInt8]] = [[0x90,0x5E,0x7F],[0x90,0x5E,0],
+  [0x90,0x5D,0x7F],[0x90,0x5D,0],[0x90,0x5F,0x7F],
+  [0x90,0x5B,0x7F],[0x90,0x5C,0x7F],
+  [0xF0,0,0,0x66,0x14,1]+Array("MP10BRG".utf8)+[1,2,3,4,0xF7],
+  Array(repeating:0x01,count:256)]
+ for bytes in fixtures {
+  var deliveries=0
+  let before=mach_absolute_time()
+  let result=withSourcePacket(bytes) { list in
+   deliveries += 1
+   precondition(list.pointee.numPackets == 1)
+   precondition(list.pointee.packet.timeStamp > 0)
+   precondition(list.pointee.packet.timeStamp >= before)
+   precondition(list.pointee.packet.timeStamp <= mach_absolute_time())
+   precondition(packetBytes(list) == bytes)
+   return OSStatus(-1234) // Delivery errors must propagate to the caller.
+  }
+  precondition(deliveries == 1 && result == -1234)
+ }
+ for invalid in [[],Array(repeating:UInt8(1),count:257)] {
+  precondition(withSourcePacket(invalid) { _ in preconditionFailure("Invalid packet was delivered") } == -50)
+ }
  var p=Parser()
  precondition(p.feed([0xF0,0x7F,0x7F]).isEmpty)
  precondition(p.feed([0x06,0x02,0xF7]).map{$0.0} == [2])
@@ -434,7 +469,7 @@ func selfTest() {
  precondition(stream.feed([0x90,94,127]+Array(hdr.prefix(3))).isEmpty)
  precondition(stream.feed(Array(hdr.dropFirst(3))+[0xF8,0,0xF7]) == [hdr+[0,0xF7]])
  precondition(stream.feed(hdr+[0,0xF7]+hdr+[0x13,0,0xF7]).count == 2)
- print("PASS: MMC parser, all MCU mappings, exact press/release bytes, custom notes/channels, unassigned commands, MCU handshake, invalid/stale replies, and separate SysEx feedback stream.")
+ print("PASS: Production CoreMIDI packet builder: current nonzero host timestamps, captured UFX transport bytes, SysEx, boundary lengths and delivery errors. MMC parser, MCU mappings, custom notes, monitor mode and handshake tests also passed.")
 
 }
 func integrationTest() throws {
@@ -452,15 +487,21 @@ func integrationTest() throws {
  defer {MIDIClientDispose(testClient);MIDIClientDispose(bridge.client)}
  try check(MIDISourceCreate(testClient,"MP10 Test Source" as CFString,&fake),"Test input")
  var received:[UInt8]=[]
+ var receivedTimeStamps:[MIDITimeStamp]=[]
  try check(MIDIInputPortCreateWithBlock(testClient,"Test Receiver" as CFString,&receiver) { list,_ in
   var collected:[UInt8]=[]
+  var stamps:[MIDITimeStamp]=[]
   var packet=UnsafeRawPointer(list).advanced(by:MemoryLayout<MIDIPacketList>.offset(of: \.packet)!).assumingMemoryBound(to:MIDIPacket.self)
   for _ in 0..<list.pointee.numPackets {
+   stamps.append(packet.pointee.timeStamp)
    let data=UnsafeRawPointer(packet).advanced(by:MemoryLayout<MIDIPacket>.offset(of: \.data)!).assumingMemoryBound(to:UInt8.self)
    collected.append(contentsOf:UnsafeBufferPointer(start:data,count:Int(packet.pointee.length)))
    packet=UnsafePointer(MIDIPacketNext(packet))
   }
-  DispatchQueue.main.async {received.append(contentsOf:collected)}
+  DispatchQueue.main.async {
+   received.append(contentsOf:collected)
+   receivedTimeStamps.append(contentsOf:stamps)
+  }
  },"Test receiver")
  try check(MIDIPortConnectSource(receiver,bridge.output,nil),"Connect test output")
  bridge.refresh(nil)
@@ -471,13 +512,15 @@ func integrationTest() throws {
  withUnsafeMutablePointer(to:&list) { pointer in
   var packet=MIDIPacketListInit(pointer)
   for chunk:[UInt8] in [[0xF0,0x7F,0x7F],[0x06,0x02,0xF7]] {
-   packet=chunk.withUnsafeBufferPointer {MIDIPacketListAdd(pointer,MemoryLayout<MIDIPacketList>.size,packet,0,$0.count,$0.baseAddress!)}
+   packet=chunk.withUnsafeBufferPointer {MIDIPacketListAdd(pointer,MemoryLayout<MIDIPacketList>.size,packet,mach_absolute_time(),$0.count,$0.baseAddress!)}
   }
   precondition(MIDIReceived(fake,pointer)==noErr)
  }
  let deadline=Date().addingTimeInterval(2)
  while received.count<6 && Date()<deadline {RunLoop.current.run(until:Date().addingTimeInterval(0.02))}
  precondition(received == [0x90,94,127,0x90,94,0],"Unexpected MCU output: \(received)")
+ precondition(receivedTimeStamps.count >= 2 && receivedTimeStamps.allSatisfy { $0 > 0 })
+ precondition(receivedTimeStamps.last! >= receivedTimeStamps.first!)
  received=[]
  bridge.modeSelector.selectItem(at:1);bridge.changeMode()
  bridge.channel.selectItem(at:15)

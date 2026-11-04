@@ -1,6 +1,6 @@
 # MP10 Reason Bridge
 
-> **1.3 diagnostic preview:** This branch adds raw MIDI capture for comparing a working UFX1604 with the MP10 bridge. It is not a confirmed Mackie compatibility fix. See [the capture instructions](DIAGNOSTICS.txt). The stable release remains v1.2.
+> **1.3 diagnostic preview 2:** Generated virtual-source MIDI packets now carry current Mach host timestamps instead of zero, correcting a CoreMIDI API-contract violation. This branch also includes raw MIDI capture for comparing the UFX1604 with the MP10 bridge. The timing defect is confirmed; the complete Reason fix awaits a target-Mac retest. See [the capture instructions](DIAGNOSTICS.txt). The stable release remains v1.2.
 
 A free, native macOS utility that translates the **Kawai MP10's MIDI Machine Control (MMC) transport messages** into **Mackie Control Universal (MCU) button messages** for Reason. A custom MIDI-note mode is also included.
 
@@ -135,7 +135,7 @@ Run the protocol self-tests without opening a GUI or starting CoreMIDI:
 "MP10 Reason Bridge.app/Contents/MacOS/MP10ReasonBridge" --self-test
 ```
 
-These cover MMC parsing and fragmentation, realtime messages, invalid input, MCU mappings and exact press/release bytes, custom notes and channels, unmapped commands, and handshake success/error cases.
+These cover the production packet builder (valid nonzero host timestamps, captured UFX payloads, buffer limits and delivery errors), MMC parsing and fragmentation, realtime messages, invalid input, MCU mappings and exact press/release bytes, custom notes and channels, unmapped commands, and handshake success/error cases.
 
 On a Mac with a graphical session and CoreMIDI available, run:
 

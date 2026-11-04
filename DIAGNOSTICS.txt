@@ -1,4 +1,58 @@
-MP10 Reason Bridge 1.3 Diagnostic Preview
+MP10 Reason Bridge 1.3 Diagnostic Preview 2 — CoreMIDI timestamp fix
+
+
+FIX IN THIS BUILD
+
+The previous bridge submitted generated virtual-source packets to MIDIReceived
+with timestamp 0. Apple's CoreMIDI contract says 0 does NOT mean "now" for
+this API: virtual sources must provide proper input timestamps.
+
+Every generated packet now uses current Mach host time, including press,
+release and handshake packets. Raw output logs include host_ticks so the
+actual submitted timestamp can be inspected.
+
+This corrects a confirmed API-contract violation. Whether it completely
+resolves Reason's Mackie behavior still requires testing on the target Mac.
+The earlier apparent Play success came from a manual Remote Override;
+native Mackie operation was not established by that observation.
+
+RETEST IN REASON
+
+1. Quit the old bridge and Reason. Start this version, then Reason.
+2. Use Output mode: Mackie Control (MCU), input: your MP10 MIDI source.
+3. In Reason, confirm Mackie > Control with these ports:
+   MIDI Input:  MP10 Reason Bridge
+   MIDI Output: MP10 Reason Bridge Feedback
+   Re-select the current ports if Reason retained an old connection.
+4. Disable/clear the manual Play override for the test. Check that the bridge
+   port is not also assigned to another active generic controller entry.
+5. Enable Raw MIDI log. Click Send beside Stop, Play, Record, Rewind and
+   Fast Forward. Test Stop while Reason is running, then Stop a second time
+   to test Reason's return-to-start behavior.
+6. Repeat with the MP10 hardware. Copy Log if any action still fails.
+
+The upper-left physical MP10 key can be assigned MMC Stop in the MP10's MMC
+page. Every incoming MMC Stop produces the same MCU Stop; Reason decides
+what a second Stop does. The combined MP10 Play/Stop key currently sends
+whatever MMC command it is configured to send. This release does not add
+local playback toggling, longer button pulses, fixed endpoint IDs or a relay
+mode: the timing correction is isolated for this test.
+
+VALIDATION
+
+The self-test now exercises the production CoreMIDI packet builder as well
+as payload translation: timestamps must be nonzero and between before/after
+Mach-clock samples; captured UFX note payloads, SysEx, size limits and error
+propagation are checked. The live integration test additionally verifies
+received nonzero timestamps, but cannot run in the restricted development
+environment. This is still a diagnostic prerelease, not a confirmed Reason fix.
+
+REFERENCE
+https://developer.apple.com/documentation/coremidi/midireceived(_:_:)
+The same timestamp requirement is documented in Apple's installed
+CoreMIDI.framework/Headers/MIDIServices.h under MIDIReceived.
+
+ORIGINAL REFERENCE-CAPTURE INSTRUCTIONS
 
 This is a diagnostic build, not a confirmed fix for Reason's Mackie profile.
 It adds Monitor input only, Raw MIDI log, Copy Log and Clear Log.
