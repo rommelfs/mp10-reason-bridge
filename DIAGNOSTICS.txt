@@ -1,0 +1,55 @@
+MP10 Reason Bridge 1.3 Diagnostic Preview
+
+This is a diagnostic build, not a confirmed fix for Reason's Mackie profile.
+It adds Monitor input only, Raw MIDI log, Copy Log and Clear Log.
+The normal MCU and custom MIDI note modes are retained.
+Quit an older bridge instance before running this app.
+
+A. Record the working UFX1604
+
+1. Keep the UFX in Mackie mode and connected directly to Reason using the
+   currently working Mackie configuration. Do not route it through the bridge.
+2. In this diagnostic app, choose Output mode > Monitor input only FIRST.
+3. Select the UFX MIDI source under MIDI Input. Click Refresh if necessary.
+   This mode records incoming MIDI only. It does not send MIDI to Reason.
+4. Click Clear Log. Press and release Play, Stop, Record, Rewind, Fast Forward
+   once each in that order, leaving about one second between buttons.
+5. Click Copy Log and paste the text into the chat, labelled UFX reference.
+
+B. Record the bridge that fails
+
+1. Choose Mackie Control (MCU) and select the MP10 input. Enable Raw MIDI log.
+2. Click Clear Log. In Reason, enable the Mackie entry for the bridge with
+   MIDI Input: MP10 Reason Bridge
+   MIDI Output: MP10 Reason Bridge Feedback
+   Use the same Mackie model as in the working UFX setup. Avoid two active
+   control-surface entries reading the bridge port.
+3. Press and release the MP10 Play, Stop, Record, Rewind, Fast Forward buttons
+   once each in that order. Note which Reason functions respond or fail.
+4. Click Copy Log and paste the text into the chat, labelled MP10 bridge.
+
+INPUT -> BRIDGE shows raw bytes from the chosen hardware.
+HOST -> BRIDGE shows Reason feedback sent to the bridge's Feedback port.
+BRIDGE -> HOST shows bytes submitted by the bridge to its virtual output;
+this does not by itself prove Reason received or acted on them.
+
+Monitor mode does not intercept Reason's direct outgoing messages to the
+physical UFX. The first log captures UFX-to-Mac traffic only; the second log
+captures both directions of the virtual bridge connection.
+
+Log times are monotonic seconds at main-queue callback processing time,
+not original hardware packet timestamps. Long callbacks are split into
+128-byte display chunks. Running-status data is preserved as received;
+the log does not synthesize missing status bytes. Only the last 1000 lines
+are retained. Copy each short test before continuing.
+
+Build status: Apple Silicon and Intel universal build; protocol self-tests
+including monitor-mode no-output translation checks pass. GUI and live MIDI
+monitoring cannot be exercised in the restricted development environment.
+The app is ad-hoc signed, not Apple-notarized. A normal macOS GUI session
+with MIDI access is required for the actual reference capture.
+
+To return to v1.2, quit this preview and reopen v1.2; select Mackie Control
+(MCU) or Custom MIDI notes as needed. Custom note assignments are preserved.
+
+No diagnostic data is uploaded automatically. Copy Log copies text only.

@@ -1,5 +1,7 @@
 # MP10 Reason Bridge
 
+> **1.3 diagnostic preview:** This branch adds raw MIDI capture for comparing a working UFX1604 with the MP10 bridge. It is not a confirmed Mackie compatibility fix. See [the capture instructions](DIAGNOSTICS.txt). The stable release remains v1.2.
+
 A free, native macOS utility that translates the **Kawai MP10's MIDI Machine Control (MMC) transport messages** into **Mackie Control Universal (MCU) button messages** for Reason. A custom MIDI-note mode is also included.
 
 The bridge creates its own virtual MIDI ports. Bome MIDI Translator, an IAC bus, and third-party libraries are not required.

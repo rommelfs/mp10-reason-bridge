@@ -8,7 +8,7 @@ let commands: [(Int, String)] = [
  (250,"Realtime Start"),(251,"Realtime Continue"),(252,"Realtime Stop")]
 func defaultNote(_ command: Int) -> Int { command == 2 ? 94 : command == 1 ? 95 : command == 3 ? 96 : 96 + (commands.firstIndex { $0.0 == command } ?? 0) }
 
-enum OutputMode: Int { case mcu = 0, custom = 1 }
+enum OutputMode: Int { case mcu = 0, custom = 1, monitor = 2 }
 func mcuNote(_ command: Int) -> Int? {
  switch command {
  case 1, 252: return 93
@@ -25,6 +25,7 @@ struct NotePulse: Equatable {
  var key: Int { Int(press[0] & 0x0F) * 128 + Int(press[1]) }
 }
 func makePulse(command: Int, mode: OutputMode, customNote: Int?, channel: Int) -> NotePulse? {
+ if mode == .monitor { return nil }
  if mode == .mcu {
   guard let n = mcuNote(command) else { return nil }
   return NotePulse(press: [0x90, UInt8(n), 127], release: [0x90, UInt8(n), 0])
@@ -80,7 +81,7 @@ struct MCUHandshake {
    return header + [valid ? 3 : 4] + serial + [0xF7]
   }
   if command == 0x13 && message == header + [0x13, 0, 0xF7] {
-   return header + [0x14] + Array("V1.2 ".utf8) + [0xF7]
+   return header + [0x14] + Array("V1.3 ".utf8) + [0xF7]
   }
   if message == header + [0x0F, 0x7F, 0xF7] { awaitingReply = false }
   return nil
@@ -138,6 +139,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
  let pulseHint = NSTextField(labelWithString: "")
  var mode: OutputMode { OutputMode(rawValue: modeSelector.indexOfSelectedItem) ?? .mcu }
  var testButtons: [Int:NSButton] = [:]
+ let rawLog = NSButton(checkboxWithTitle:"Raw MIDI log",target:nil,action:nil)
  let log = NSTextView()
  let status = NSTextField(labelWithString: "")
  var fields: [Int:NSTextField] = [:]
@@ -177,7 +179,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
  }
  func buildUI() {
   window = NSWindow(contentRect:NSRect(x:0,y:0,width:710,height:840),styleMask:[.titled,.closable,.miniaturizable],backing:.buffered,defer:false)
-  window.title = "MP10 → Reason Bridge"
+  window.title = "MP10 → Reason Bridge · 1.3 Diagnostic Preview"
   window.center()
   let view = window.contentView!
   func label(_ text:String,_ x:CGFloat,_ y:CGFloat,_ w:CGFloat) {
@@ -191,8 +193,8 @@ final class Bridge: NSObject, NSApplicationDelegate {
   label("Reason MIDI Out: MP10 Reason Bridge Feedback",20,704,670)
   label("Output mode",20,676,130)
   modeSelector.frame=NSRect(x:150,y:672,width:285,height:28)
-  modeSelector.addItems(withTitles:["Mackie Control (MCU)","Custom MIDI notes"])
-  modeSelector.selectItem(at:defaults.integer(forKey:"outputMode") == 1 ? 1 : 0)
+  modeSelector.addItems(withTitles:["Mackie Control (MCU)","Custom MIDI notes","Monitor input only"])
+  modeSelector.selectItem(at:OutputMode(rawValue:defaults.integer(forKey:"outputMode"))?.rawValue ?? 0)
   modeSelector.target=self;modeSelector.action=#selector(changeMode);view.addSubview(modeSelector)
   label("MIDI channel",450,676,100)
   channel.frame=NSRect(x:550,y:672,width:130,height:28);channel.addItems(withTitles:(1...16).map(String.init));channel.selectItem(at:max(0,min(15,defaults.integer(forKey:"channel"))));channel.target=self;channel.action=#selector(saveChannel);view.addSubview(channel)
@@ -211,7 +213,10 @@ final class Bridge: NSObject, NSApplicationDelegate {
   pulseHint.frame=NSRect(x:20,y:160,width:670,height:22);view.addSubview(pulseHint)
   updateModeUI()
   status.frame=NSRect(x:20,y:133,width:670,height:22);view.addSubview(status)
-  let scroll=NSScrollView(frame:NSRect(x:20,y:20,width:670,height:108));scroll.hasVerticalScroller=true
+  rawLog.frame=NSRect(x:20,y:104,width:180,height:24);view.addSubview(rawLog)
+  let copy=NSButton(title:"Copy Log",target:self,action:#selector(copyLog));copy.frame=NSRect(x:580,y:104,width:110,height:25);view.addSubview(copy)
+  let clear=NSButton(title:"Clear Log",target:self,action:#selector(clearLog));clear.frame=NSRect(x:460,y:104,width:110,height:25);view.addSubview(clear)
+  let scroll=NSScrollView(frame:NSRect(x:20,y:20,width:670,height:80));scroll.hasVerticalScroller=true
   log.frame=scroll.bounds;log.isVerticallyResizable=true;log.maxSize=NSSize(width:CGFloat.greatestFiniteMagnitude,height:CGFloat.greatestFiniteMagnitude)
   log.isEditable=false;log.isSelectable=true;log.font=NSFont.monospacedSystemFont(ofSize:11,weight:.regular)
   log.autoresizingMask=[.width];log.textContainer?.widthTracksTextView=true
@@ -231,25 +236,32 @@ final class Bridge: NSObject, NSApplicationDelegate {
   defaults.set(mode.rawValue,forKey:"outputMode")
   hostParser=SysExStream();handshake=MCUHandshake()
   updateModeUI()
-  append(mode == .mcu ? "MCU: Channel 1, velocity 127/0. Select Mackie > Control in Reason." : "Custom MIDI note mapping enabled.")
+  if mode == .monitor { append("MONITOR ONLY: hardware input is recorded; no MIDI is sent to Reason. Keep the UFX connected directly to Reason.") }
+  else { append(mode == .mcu ? "MCU: Channel 1, velocity 127/0. Select Mackie > Control in Reason." : "Custom MIDI note mapping enabled.") }
  }
  func updateModeUI() {
+  rawLog.isEnabled = mode != .monitor
+  if mode == .monitor { rawLog.state = .on }
   channel.isEnabled = mode == .custom
   channel.selectItem(at:mode == .mcu ? 0 : max(0,min(15,defaults.integer(forKey:"channel"))))
   for (command,field) in fields {
    field.isEditable = mode == .custom
    field.isSelectable = mode == .custom
-   if mode == .mcu { field.stringValue = mcuNote(command).map(String.init) ?? "—" }
+   if mode == .monitor { field.stringValue = "—" }
+   else if mode == .mcu { field.stringValue = mcuNote(command).map(String.init) ?? "—" }
    else {
     let key="note.\(command)"
     field.integerValue=defaults.object(forKey:key) == nil ? defaultNote(command) : defaults.integer(forKey:key)
    }
-   testButtons[command]?.isEnabled = mode == .custom || mcuNote(command) != nil
+   testButtons[command]?.isEnabled = mode == .custom || (mode == .mcu && mcuNote(command) != nil)
   }
   modeHint.stringValue = mode == .mcu ? "MCU: Rewind 91 · Fast Forward 92 · Stop 93 · Play 94 · Record 95" : "Custom notes: your existing assignments are preserved."
+  if mode == .monitor { modeHint.stringValue = "Select the UFX input, press its transport buttons, then copy the log." }
   pulseHint.stringValue = mode == .mcu ? "Channel 1 · Note On 127 → Note On 0 after 80 ms · — means unassigned." : "Note On 100 → Note Off 0 after 80 ms · Select any MIDI channel."
+  if mode == .monitor { pulseHint.stringValue = "Monitor only: no MIDI output. Reason stays connected directly to the UFX." }
  }
  func receiveHost(_ bytes:[UInt8]) {
+  trace("HOST → BRIDGE",bytes)
   guard mode == .mcu else { return }
   for message in hostParser.feed(bytes) {
    if let reply=handshake.reply(to:message) {
@@ -297,6 +309,8 @@ final class Bridge: NSObject, NSApplicationDelegate {
  }
  func receive(_ bytes:[UInt8]) {
   guard selected != 0 else {return}
+  trace("INPUT → BRIDGE",bytes)
+  guard mode != .monitor else { return }
   for (command,raw) in parser.feed(bytes) {
    let title=commands.first {$0.0==command}?.1 ?? "Unknown"
    append("IN \(raw.map {String(format:"%02X",$0)}.joined(separator:" ")) · \(title)")
@@ -305,7 +319,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
  }
  @objc func testNote(_ sender:NSButton) {trigger(sender.tag)}
  func trigger(_ command:Int) {
-  guard enabled else { return }
+  guard enabled,mode != .monitor else { return }
   let custom = mode == .custom ? note(command) : nil
   guard let pulse=makePulse(command:command,mode:mode,customNote:custom,channel:channel.indexOfSelectedItem) else {
    if mode == .mcu { append("MCU: This MMC command is unassigned and will be ignored.") }
@@ -325,6 +339,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
  }
  var pulseGeneration:[Int:Int]=[:]
  func send(_ bytes:[UInt8]) {
+  trace("BRIDGE → HOST",bytes)
   var list=MIDIPacketList()
   let result:OSStatus=withUnsafeMutablePointer(to:&list) { pointer in
    let packet=MIDIPacketListInit(pointer)
@@ -335,8 +350,21 @@ final class Bridge: NSObject, NSApplicationDelegate {
   }
   if result != noErr {append("Send failed: \(result)")}
  }
+ @objc func copyLog() {
+  let report="MP10 Reason Bridge 1.3 diagnostic preview\nMode: \(modeSelector.titleOfSelectedItem ?? "unknown")\nInput: \(selected == 0 ? "none" : name(selected))\nOS: \(ProcessInfo.processInfo.operatingSystemVersionString)\nRaw entries use monotonic seconds at callback processing time, not hardware packet timestamps.\n\n" + logLines.joined(separator:"\n")
+  NSPasteboard.general.clearContents();NSPasteboard.general.setString(report,forType:.string)
+ }
+ @objc func clearLog() { logLines=[];log.string="" }
+ func trace(_ direction:String,_ bytes:[UInt8]) {
+  guard rawLog.state == .on,!bytes.isEmpty else { return }
+  let timestamp=String(format:"%.3f",ProcessInfo.processInfo.systemUptime)
+  for offset in stride(from:0,to:bytes.count,by:128) {
+   let chunk=bytes[offset..<min(offset+128,bytes.count)]
+   append("\(timestamp) \(direction) [\(offset)..<\(offset+chunk.count) of \(bytes.count)]: \(chunk.map{String(format:"%02X",$0)}.joined(separator:" "))")
+  }
+ }
  func append(_ message:String) {
-  logLines.append(message);if logLines.count>150 {logLines.removeFirst(logLines.count-150)}
+  logLines.append(message);if logLines.count>1000 {logLines.removeFirst(logLines.count-1000)}
   log.string=logLines.joined(separator:"\n");log.scrollToEndOfDocument(nil)
  }
  func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool {true}
@@ -377,6 +405,9 @@ func selfTest() {
    precondition(actual == NotePulse(press:[UInt8(0x90+ch),UInt8(n),100],release:[UInt8(0x80+ch),UInt8(n),0]))
   }
  }
+ for (command,_) in commands {
+  precondition(makePulse(command:command,mode:.monitor,customNote:94,channel:0) == nil)
+ }
  precondition(makePulse(command:2,mode:.custom,customNote:128,channel:0) == nil)
  precondition(makePulse(command:2,mode:.custom,customNote:nil,channel:0) == nil)
  precondition(makePulse(command:2,mode:.custom,customNote:94,channel:16) == nil)
@@ -394,7 +425,7 @@ func selfTest() {
  precondition(h.reply(to:hdr+[2]+serial+[0,0,0,0,0xF7]) == hdr+[4]+serial+[0xF7])
  precondition(h.reply(to:[0xF0,0,0,0x66,0x15,0,0xF7]) == nil)
  precondition(h.reply(to:hdr+[0,1,0xF7]) == nil)
- precondition(h.reply(to:hdr+[0x13,0,0xF7]) == hdr+[0x14]+Array("V1.2 ".utf8)+[0xF7])
+ precondition(h.reply(to:hdr+[0x13,0,0xF7]) == hdr+[0x14]+Array("V1.3 ".utf8)+[0xF7])
  _ = h.reply(to:hdr+[0x63,0xF7])
  precondition(h.awaitingReply)
  _ = h.reply(to:hdr+[0x0F,0x7F,0xF7])
