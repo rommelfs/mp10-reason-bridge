@@ -195,7 +195,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
  }
  func buildUI() {
   window = NSWindow(contentRect:NSRect(x:0,y:0,width:710,height:840),styleMask:[.titled,.closable,.miniaturizable],backing:.buffered,defer:false)
-  window.title = "MP10 → Reason Bridge · 1.3 Diagnostic Preview 2"
+  window.title = "MP10 → Reason Bridge · 1.3"
   window.center()
   let view = window.contentView!
   func label(_ text:String,_ x:CGFloat,_ y:CGFloat,_ w:CGFloat) {
@@ -362,7 +362,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
   if result != noErr {append("Send failed: \(result)")}
  }
  @objc func copyLog() {
-  let report="MP10 Reason Bridge 1.3 diagnostic preview 2 (CoreMIDI timestamp fix)\nMode: \(modeSelector.titleOfSelectedItem ?? "unknown")\nInput: \(selected == 0 ? "none" : name(selected))\nOS: \(ProcessInfo.processInfo.operatingSystemVersionString)\nRaw entries use monotonic seconds at callback processing time, not hardware packet timestamps. Generated source packets carry current Mach host time.\n\n" + logLines.joined(separator:"\n")
+  let report="MP10 Reason Bridge 1.3\nMode: \(modeSelector.titleOfSelectedItem ?? "unknown")\nInput: \(selected == 0 ? "none" : name(selected))\nOS: \(ProcessInfo.processInfo.operatingSystemVersionString)\nRaw entries use monotonic seconds at callback processing time, not hardware packet timestamps. Generated source packets carry current Mach host time.\n\n" + logLines.joined(separator:"\n")
   NSPasteboard.general.clearContents();NSPasteboard.general.setString(report,forType:.string)
  }
  @objc func clearLog() { logLines=[];log.string="" }

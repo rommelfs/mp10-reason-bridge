@@ -1,12 +1,10 @@
 # MP10 Reason Bridge
 
-> **1.3 diagnostic preview 2:** Generated virtual-source MIDI packets now carry current Mach host timestamps instead of zero, correcting a CoreMIDI API-contract violation. This branch also includes raw MIDI capture for comparing the UFX1604 with the MP10 bridge. The timing defect is confirmed; the complete Reason fix awaits a target-Mac retest. See [the capture instructions](DIAGNOSTICS.txt). The stable release remains v1.2.
-
 A free, native macOS utility that translates the **Kawai MP10's MIDI Machine Control (MMC) transport messages** into **Mackie Control Universal (MCU) button messages** for Reason. A custom MIDI-note mode is also included.
 
 The bridge creates its own virtual MIDI ports. Bome MIDI Translator, an IAC bus, and third-party libraries are not required.
 
-**Status:** the universal app builds for Apple Silicon and Intel, and protocol self-tests pass. End-to-end operation with a physical MP10 and Reason 14 on macOS Tahoe has **not yet been verified**. The development environment does not permit the CoreMIDI/GUI integration test to run.
+**Status:** the project owner has confirmed that the CoreMIDI timestamp correction works with the Kawai MP10 and Reason 14 on macOS Tahoe. Version **1.3** includes this correction. Universal builds and protocol/packet tests pass; the automated CoreMIDI/GUI integration test remains unavailable in the restricted development environment.
 
 ## Download and requirements
 
@@ -19,7 +17,7 @@ Download the app ZIP from [Releases](https://github.com/rommelfs/mp10-reason-bri
 
 The app is ad-hoc signed, **not Apple-notarized**. If macOS blocks it as an unidentified developer, review the app and use **System Settings → Privacy & Security → Open Anyway** if appropriate.
 
-Version 1.2 uses English throughout the interface, status messages, logs, and test output. Quit an older bridge before replacing it with the new app. Existing custom mappings and MIDI port names are preserved.
+The app uses English throughout the interface, status messages, logs, and test output. Quit an older bridge before replacing it with the new app. Existing custom mappings and MIDI port names are preserved.
 
 ## Connect the MP10
 
@@ -33,24 +31,35 @@ The MP10's button assignments are configurable under **MIDI EDIT → MMC**; see 
 
 ## Set up Reason 14 with Mackie Control
 
-The default **Output mode** is **Mackie Control (MCU)**. Later mode selections are remembered.
+The following **Reason controller configuration is confirmed working**:
+
+| Reason setting | Value |
+| --- | --- |
+| Manufacturer | `Mackie` |
+| Model | `Control` |
+| Input | `MP10 Reason Bridge` |
+| Output | `MP10 Reason Bridge Feedback` |
+
+These are the ports selected **inside Reason**. In the bridge app itself, select the physical MP10/interface input (for example `USB-MIDI`).
+
+The default bridge **Output mode** is **Mackie Control (MCU)**. Later mode selections are remembered.
 
 1. Open **Reason → Settings → MIDI**.
 2. If an older bridge configuration exists, remove its generic controller entry. Keep your actual MP10 keyboard entry.
-3. Choose **Add manually**, then **Manufacturer: Mackie**, **Model: Control** (or Control Universal, depending on the name shown).
-4. Set the ports as follows:
-
-   | Reason setting | Port |
-   | --- | --- |
-   | MIDI Input | `MP10 Reason Bridge` |
-   | MIDI Output | `MP10 Reason Bridge Feedback` |
-
+3. Choose **Add manually**, then **Manufacturer: Mackie**, **Model: Control**.
+4. Set **Input: MP10 Reason Bridge** and **Output: MP10 Reason Bridge Feedback**, exactly as shown in the table above.
 5. Keep the actual MP10 as your master keyboard for playing and recording notes.
 6. Test Play, Stop, Record, Rewind, and Fast Forward.
 
 This setup uses Reason's built-in Mackie mapping rather than individual Remote Overrides. **Add the surface manually:** automatic detection is not guaranteed. The bridge implements a transport subset and basic connection messages, not a complete Mackie mixing console.
 
-Avoid multiple active Reason control-surface entries using the same bridge input. Older overrides associated with a generic bridge controller are not needed for this MCU setup.
+Avoid multiple active Reason control-surface entries using the same bridge input. Clear old manual transport overrides when testing the native Mackie mapping; a Play override previously masked a connection problem. Each MMC Stop remains the same MCU Stop command; Reason handles stopping on the first press and returning to the song start on a second press.
+
+## Updating from an earlier version
+
+Quit the old bridge and Reason. Replace the app with v1.3, start the bridge, then reopen Reason. If Reason retained an unavailable port, re-select the Input and Output listed above. Custom note assignments are preserved.
+
+Versions before the timestamp correction could emit correct MIDI bytes with invalid virtual-source timestamps. Version 1.3 supplies current Mach host time for every generated press, release and handshake packet, as required by [CoreMIDI's `MIDIReceived` contract](https://developer.apple.com/documentation/coremidi/midireceived(_:_:)). This corrected the reported Mackie problem in [issue #1](https://github.com/rommelfs/mp10-reason-bridge/issues/1).
 
 ## MCU mapping
 
@@ -126,6 +135,10 @@ cd mp10-reason-bridge
 ```
 
 The script compiles both `arm64` and `x86_64` for macOS 13+, combines them into a universal app, applies an ad-hoc signature, and runs the protocol self-tests. The app is written to `MP10 Reason Bridge.app` in the repository directory. It has no package dependencies.
+
+## Diagnostics
+
+The optional **Raw MIDI log**, **Copy Log**, **Clear Log**, and **Monitor input only** controls help compare hardware and bridge messages. See [DIAGNOSTICS.txt](DIAGNOSTICS.txt). Normal use requires **Mackie Control (MCU)** mode; monitor-only mode sends no transport commands.
 
 ## Tests
 

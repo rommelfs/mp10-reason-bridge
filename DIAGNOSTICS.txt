@@ -1,109 +1,79 @@
-MP10 Reason Bridge 1.3 Diagnostic Preview 2 — CoreMIDI timestamp fix
+MP10 Reason Bridge 1.3 — optional MIDI diagnostics
 
+Version 1.3 includes the CoreMIDI timestamp correction confirmed working by
+the project owner with MP10, Reason 14 and macOS Tahoe. Diagnostics are
+optional; use Mackie Control (MCU) mode for normal transport control.
 
-FIX IN THIS BUILD
+CONFIRMED REASON CONFIGURATION
 
-The previous bridge submitted generated virtual-source packets to MIDIReceived
-with timestamp 0. Apple's CoreMIDI contract says 0 does NOT mean "now" for
-this API: virtual sources must provide proper input timestamps.
+Manufacturer: Mackie
+Model:        Control
+Input:        MP10 Reason Bridge
+Output:       MP10 Reason Bridge Feedback
 
-Every generated packet now uses current Mach host time, including press,
-release and handshake packets. Raw output logs include host_ticks so the
-actual submitted timestamp can be inspected.
+Select these ports inside Reason. In the bridge app, select the physical
+MP10/interface MIDI input, such as USB-MIDI. Start the bridge before Reason.
+Keep the real MP10 configured as your master keyboard for playing notes.
+Avoid duplicate active entries reading the bridge port. Clear old manual
+transport overrides when testing the native Mackie configuration.
 
-This corrects a confirmed API-contract violation. Whether it completely
-resolves Reason's Mackie behavior still requires testing on the target Mac.
-The earlier apparent Play success came from a manual Remote Override;
-native Mackie operation was not established by that observation.
+UPGRADING
 
-RETEST IN REASON
+Quit the older bridge and Reason, replace the app with v1.3, start the bridge,
+then reopen Reason. Re-select the current ports in Reason if necessary.
+Custom MIDI-note assignments are preserved.
 
-1. Quit the old bridge and Reason. Start this version, then Reason.
-2. Use Output mode: Mackie Control (MCU), input: your MP10 MIDI source.
-3. In Reason, confirm Mackie > Control with these ports:
-   MIDI Input:  MP10 Reason Bridge
-   MIDI Output: MP10 Reason Bridge Feedback
-   Re-select the current ports if Reason retained an old connection.
-4. Disable/clear the manual Play override for the test. Check that the bridge
-   port is not also assigned to another active generic controller entry.
-5. Enable Raw MIDI log. Click Send beside Stop, Play, Record, Rewind and
-   Fast Forward. Test Stop while Reason is running, then Stop a second time
-   to test Reason's return-to-start behavior.
-6. Repeat with the MP10 hardware. Copy Log if any action still fails.
+RAW MIDI LOG
 
-The upper-left physical MP10 key can be assigned MMC Stop in the MP10's MMC
-page. Every incoming MMC Stop produces the same MCU Stop; Reason decides
-what a second Stop does. The combined MP10 Play/Stop key currently sends
-whatever MMC command it is configured to send. This release does not add
-local playback toggling, longer button pulses, fixed endpoint IDs or a relay
-mode: the timing correction is isolated for this test.
+Enable Raw MIDI log, click Clear Log, test a few buttons, then click Copy Log.
+The text contains the selected mode, source, OS version and latest 1000 lines.
 
-VALIDATION
+INPUT -> BRIDGE: bytes received from the selected hardware input.
+HOST -> BRIDGE: feedback received from Reason on the bridge Feedback port.
+BRIDGE -> HOST: bytes submitted by the bridge to its virtual output; this
+is not confirmation that Reason acted on them.
 
-The self-test now exercises the production CoreMIDI packet builder as well
-as payload translation: timestamps must be nonzero and between before/after
-Mach-clock samples; captured UFX note payloads, SysEx, size limits and error
-propagation are checked. The live integration test additionally verifies
-received nonzero timestamps, but cannot run in the restricted development
-environment. This is still a diagnostic prerelease, not a confirmed Reason fix.
+The leading time is monotonic seconds at callback processing time, not the
+original hardware timestamp. Output lines include host_ticks, the actual
+nonzero Mach timestamp submitted with that generated packet. Long input
+callbacks are displayed in 128-byte chunks; boundaries are not necessarily
+MIDI-message boundaries. SysEx may span several input callbacks.
 
-REFERENCE
+For example, the MP10 sends MMC Play as F0 7F 7F 06 02 F7. The bridge turns it
+into MCU press 90 5E 7F and release 90 5E 00 after 80 ms. Different input and
+output bytes are expected: that conversion is the purpose of the bridge.
+
+REFERENCE CAPTURE
+
+1. Keep the reference device (such as UFX1604 in Mackie mode) connected
+   directly to Reason with its known working configuration.
+2. In the bridge, choose Monitor input only, then select the reference input.
+3. Clear Log, press/release Play, Stop, Record, Rewind, Fast Forward once each.
+4. Copy Log before changing the selected source, and label it with the device.
+5. Switch back to Mackie Control (MCU) and the MP10 input for normal use.
+
+Monitor-only mode sends no transport output. It records hardware-to-Mac
+traffic; it cannot intercept Reason messages sent directly to physical
+hardware. Reason-to-bridge feedback is visible only when Reason's Output
+is MP10 Reason Bridge Feedback.
+
+TIMESTAMP FIX
+
+Earlier builds passed timestamp 0 to MIDIReceived. That value does not mean
+"now" for a virtual MIDI source. Version 1.3 assigns current Mach host time
+to generated press, release and handshake packets. This fixed the reported
+native Mackie behavior. See issue #1 and Apple's CoreMIDI documentation:
+https://github.com/rommelfs/mp10-reason-bridge/issues/1
 https://developer.apple.com/documentation/coremidi/midireceived(_:_:)
-The same timestamp requirement is documented in Apple's installed
-CoreMIDI.framework/Headers/MIDIServices.h under MIDIReceived.
 
-ORIGINAL REFERENCE-CAPTURE INSTRUCTIONS
+TESTS
 
-This is a diagnostic build, not a confirmed fix for Reason's Mackie profile.
-It adds Monitor input only, Raw MIDI log, Copy Log and Clear Log.
-The normal MCU and custom MIDI note modes are retained.
-Quit an older bridge instance before running this app.
-
-A. Record the working UFX1604
-
-1. Keep the UFX in Mackie mode and connected directly to Reason using the
-   currently working Mackie configuration. Do not route it through the bridge.
-2. In this diagnostic app, choose Output mode > Monitor input only FIRST.
-3. Select the UFX MIDI source under MIDI Input. Click Refresh if necessary.
-   This mode records incoming MIDI only. It does not send MIDI to Reason.
-4. Click Clear Log. Press and release Play, Stop, Record, Rewind, Fast Forward
-   once each in that order, leaving about one second between buttons.
-5. Click Copy Log and paste the text into the chat, labelled UFX reference.
-
-B. Record the bridge that fails
-
-1. Choose Mackie Control (MCU) and select the MP10 input. Enable Raw MIDI log.
-2. Click Clear Log. In Reason, enable the Mackie entry for the bridge with
-   MIDI Input: MP10 Reason Bridge
-   MIDI Output: MP10 Reason Bridge Feedback
-   Use the same Mackie model as in the working UFX setup. Avoid two active
-   control-surface entries reading the bridge port.
-3. Press and release the MP10 Play, Stop, Record, Rewind, Fast Forward buttons
-   once each in that order. Note which Reason functions respond or fail.
-4. Click Copy Log and paste the text into the chat, labelled MP10 bridge.
-
-INPUT -> BRIDGE shows raw bytes from the chosen hardware.
-HOST -> BRIDGE shows Reason feedback sent to the bridge's Feedback port.
-BRIDGE -> HOST shows bytes submitted by the bridge to its virtual output;
-this does not by itself prove Reason received or acted on them.
-
-Monitor mode does not intercept Reason's direct outgoing messages to the
-physical UFX. The first log captures UFX-to-Mac traffic only; the second log
-captures both directions of the virtual bridge connection.
-
-Log times are monotonic seconds at main-queue callback processing time,
-not original hardware packet timestamps. Long callbacks are split into
-128-byte display chunks. Running-status data is preserved as received;
-the log does not synthesize missing status bytes. Only the last 1000 lines
-are retained. Copy each short test before continuing.
-
-Build status: Apple Silicon and Intel universal build; protocol self-tests
-including monitor-mode no-output translation checks pass. GUI and live MIDI
-monitoring cannot be exercised in the restricted development environment.
-The app is ad-hoc signed, not Apple-notarized. A normal macOS GUI session
-with MIDI access is required for the actual reference capture.
-
-To return to v1.2, quit this preview and reopen v1.2; select Mackie Control
-(MCU) or Custom MIDI notes as needed. Custom note assignments are preserved.
+--self-test checks the production packet builder (valid current timestamps,
+reference payloads, SysEx, size limits and delivery errors) and protocol logic.
+--integration-test requires a macOS graphical session and available CoreMIDI;
+it verifies virtual-port delivery, both output modes, preferences, feedback,
+handshake and received nonzero timestamps. That automated integration test
+is unavailable in the restricted development environment; the physical
+Reason setup was confirmed by the project owner.
 
 No diagnostic data is uploaded automatically. Copy Log copies text only.
