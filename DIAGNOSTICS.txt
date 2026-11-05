@@ -1,4 +1,4 @@
-MP10 Reason Bridge 1.3 — optional MIDI diagnostics
+MP10 Reason Bridge 1.4 — optional MIDI diagnostics
 
 Version 1.3 includes the CoreMIDI timestamp correction confirmed working by
 the project owner with MP10, Reason 14 and macOS Tahoe. Diagnostics are
@@ -19,9 +19,21 @@ transport overrides when testing the native Mackie configuration.
 
 UPGRADING
 
-Quit the older bridge and Reason, replace the app with v1.3, start the bridge,
+Quit the older bridge and Reason, replace the app with v1.4, start the bridge,
 then reopen Reason. Re-select the current ports in Reason if necessary.
 Custom MIDI-note assignments are preserved.
+
+AUTOMATIC RECONNECTION
+
+Select the physical input once. Its CoreMIDI ID, display name and available
+manufacturer/model properties are saved. The app reconnects after restart
+or hardware replug. A changed driver ID falls back to one matching identity;
+ambiguous devices require manual selection. A missing saved device produces
+Waiting for ...; the app retries every two seconds and on CoreMIDI changes.
+Choosing the empty Select input entry deliberately disables auto-reconnect.
+Virtual Reason port IDs are retained from v1.4 onward. A first-time upgrade
+may require one port re-selection in Reason. Quit other bridge instances
+if a persisted virtual port identity cannot be restored.
 
 RAW MIDI LOG
 
@@ -68,11 +80,12 @@ https://developer.apple.com/documentation/coremidi/midireceived(_:_:)
 
 TESTS
 
---self-test checks the production packet builder (valid current timestamps,
+--self-test checks saved-input matching/persistence and the production packet builder (valid current timestamps,
 reference payloads, SysEx, size limits and delivery errors) and protocol logic.
 --integration-test requires a macOS graphical session and available CoreMIDI;
 it verifies virtual-port delivery, both output modes, preferences, feedback,
-handshake and received nonzero timestamps. That automated integration test
+handshake, received nonzero timestamps, input replug with resumed translation,
+explicit disconnect and virtual-port identity restoration. That automated integration test
 is unavailable in the restricted development environment; the physical
 Reason setup was confirmed by the project owner.
 

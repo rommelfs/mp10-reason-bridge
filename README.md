@@ -4,7 +4,7 @@ A free, native macOS utility that translates the **Kawai MP10's MIDI Machine Con
 
 The bridge creates its own virtual MIDI ports. Bome MIDI Translator, an IAC bus, and third-party libraries are not required.
 
-**Status:** the project owner has confirmed that the CoreMIDI timestamp correction works with the Kawai MP10 and Reason 14 on macOS Tahoe. Version **1.3** includes this correction. Universal builds and protocol/packet tests pass; the automated CoreMIDI/GUI integration test remains unavailable in the restricted development environment.
+**Status:** the project owner has confirmed that the CoreMIDI timestamp correction works with the Kawai MP10 and Reason 14 on macOS Tahoe. Version **1.4** retains this correction and adds automatic input reconnection. Universal builds, reconnect-selection tests and protocol/packet tests pass; the automated CoreMIDI/GUI integration test remains unavailable in the restricted development environment.
 
 ## Download and requirements
 
@@ -23,11 +23,27 @@ The app uses English throughout the interface, status messages, logs, and test o
 
 1. Connect the MP10 to your Mac.
 2. Start the bridge before opening Reason.
-3. Choose the MP10's input in **MIDI Input**. If using a MIDI interface, choose its corresponding port. Click **Refresh** if needed.
+3. Choose the MP10's input in **MIDI Input** once. If using a MIDI interface, choose its corresponding port. The app remembers the choice and reconnects automatically on subsequent app launches or device reconnections. Click **Refresh** if needed.
 4. Enable **TRANSPORT** on the MP10.
 5. Press a transport button. The log should show an `IN` message with the decoded command and an `OUT` message with the generated note.
 
 The MP10's button assignments are configurable under **MIDI EDIT → MMC**; see page 46 of the [MP10 manual](https://www.kawai.de/service/mp10.pdf). The incoming command may therefore differ from the button's printed label. Use the log to see what is actually transmitted.
+
+## Automatic reconnection (v1.4)
+
+Select your MIDI input once after updating from v1.3. The app then remembers it and starts processing automatically when that input is available:
+
+- **App restart:** reconnects to the remembered input and restores the existing output mode.
+- **Device unplug/replug or power cycle:** waits for the remembered input and reconnects without pressing Refresh or reselecting it.
+- **Device connected later:** displays **Waiting for …** until it appears. CoreMIDI notifications trigger a refresh; a two-second retry handles devices that become ready later.
+
+The input is matched by its CoreMIDI unique ID. If the driver changes that ID, the app falls back to a single matching display name plus saved manufacturer/model information when available. If more than one input matches, select the intended input manually. The app does not switch to an unrelated MP10 while the remembered input is missing. Interfaces with indistinguishable names/metadata cannot always be identified individually by a driver that changes IDs.
+
+Choosing **— Select input —** explicitly disconnects, forgets the input and disables automatic reconnection until another input is selected. On a fresh installation with no saved choice, a single input whose name contains MP10 is selected automatically. Generic names such as USB-MIDI may require the initial manual selection.
+
+The virtual Reason input/output ports retain their CoreMIDI IDs from v1.4 onward. After the first upgrade from an older build, reselect the current ports in Reason once if needed. Quit other bridge instances if the app reports that a saved port ID is already in use.
+
+The reconnect policy and persistence are covered by automated tests. Live unplug/replug and Reason reconnection still require target-Mac verification. **Monitor input only** is restored if it was the selected mode; select **Mackie Control (MCU)** for normal transport processing.
 
 ## Set up Reason 14 with Mackie Control
 
@@ -57,7 +73,7 @@ Avoid multiple active Reason control-surface entries using the same bridge input
 
 ## Updating from an earlier version
 
-Quit the old bridge and Reason. Replace the app with v1.3, start the bridge, then reopen Reason. If Reason retained an unavailable port, re-select the Input and Output listed above. Custom note assignments are preserved.
+Quit the old bridge and Reason. Replace the app with v1.4, start the bridge, then reopen Reason. If Reason retained an unavailable port, re-select the Input and Output listed above. Custom note assignments are preserved.
 
 Versions before the timestamp correction could emit correct MIDI bytes with invalid virtual-source timestamps. Version 1.3 supplies current Mach host time for every generated press, release and handshake packet, as required by [CoreMIDI's `MIDIReceived` contract](https://developer.apple.com/documentation/coremidi/midireceived(_:_:)). This corrected the reported Mackie problem in [issue #1](https://github.com/rommelfs/mp10-reason-bridge/issues/1).
 
@@ -148,7 +164,7 @@ Run the protocol self-tests without opening a GUI or starting CoreMIDI:
 "MP10 Reason Bridge.app/Contents/MacOS/MP10ReasonBridge" --self-test
 ```
 
-These cover the production packet builder (valid nonzero host timestamps, captured UFX payloads, buffer limits and delivery errors), MMC parsing and fragmentation, realtime messages, invalid input, MCU mappings and exact press/release bytes, custom notes and channels, unmapped commands, and handshake success/error cases.
+These cover saved-input serialization, stable-ID matching, changed-ID fallback, missing/ambiguous devices, explicit disconnection, and the production packet builder (valid nonzero host timestamps, captured UFX payloads, buffer limits and delivery errors), MMC parsing and fragmentation, realtime messages, invalid input, MCU mappings and exact press/release bytes, custom notes and channels, unmapped commands, and handshake success/error cases.
 
 On a Mac with a graphical session and CoreMIDI available, run:
 
@@ -156,7 +172,7 @@ On a Mac with a graphical session and CoreMIDI available, run:
 "MP10 Reason Bridge.app/Contents/MacOS/MP10ReasonBridge" --integration-test
 ```
 
-This briefly opens a test window and creates a virtual MP10 and test receiver. It checks packet traversal, both output modes, preservation of custom assignments, feedback without echo, and the handshake over virtual MIDI ports. It uses a separate temporary preferences domain. It does not replace testing with a physical MP10 and Reason.
+This briefly opens a test window and creates a virtual MP10 and test receiver. It checks packet traversal, both output modes, preservation of custom assignments, feedback without echo, the handshake, source unplug/replug followed by resumed translation, explicit disconnect, and virtual-port identity restoration. It uses a separate temporary preferences domain. It does not replace testing with a physical MP10 and Reason.
 
 ## Source files
 

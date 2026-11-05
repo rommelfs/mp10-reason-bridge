@@ -97,7 +97,7 @@ struct MCUHandshake {
    return header + [valid ? 3 : 4] + serial + [0xF7]
   }
   if command == 0x13 && message == header + [0x13, 0, 0xF7] {
-   return header + [0x14] + Array("V1.3 ".utf8) + [0xF7]
+   return header + [0x14] + Array("V1.4 ".utf8) + [0xF7]
   }
   if message == header + [0x0F, 0x7F, 0xF7] { awaitingReply = false }
   return nil
@@ -146,6 +146,40 @@ func check(_ status: OSStatus, _ action: String) throws {
  if status != noErr { throw NSError(domain: "CoreMIDI", code: Int(status), userInfo: [NSLocalizedDescriptionKey:"\(action): CoreMIDI error \(status)"]) }
 }
 
+struct RememberedInput: Codable, Equatable {
+ let uniqueID: Int32?
+ let name: String
+ let manufacturer: String?
+ let model: String?
+}
+struct InputSource {
+ let endpoint: MIDIEndpointRef
+ let identity: RememberedInput
+}
+enum InputChoice: Equatable { case connect(MIDIEndpointRef), missing, ambiguous, disabled }
+func chooseInput(_ sources:[InputSource], remembered:RememberedInput?, disabled:Bool) -> InputChoice {
+ if disabled { return .disabled }
+ if let remembered=remembered {
+  if let id=remembered.uniqueID {
+   let exact=sources.filter { $0.identity.uniqueID == id }
+   if exact.count == 1 { return .connect(exact[0].endpoint) }
+   if exact.count > 1 { return .ambiguous }
+  }
+  // Some USB drivers assign a new ID after replugging. Fall back only to a
+  // single matching name and all available saved manufacturer/model metadata.
+  let matches=sources.filter {
+   $0.identity.name == remembered.name &&
+   (remembered.manufacturer == nil || $0.identity.manufacturer == remembered.manufacturer) &&
+   (remembered.model == nil || $0.identity.model == remembered.model)
+  }
+  if matches.count == 1 { return .connect(matches[0].endpoint) }
+  return matches.isEmpty ? .missing : .ambiguous
+ }
+ let mp10=sources.filter { $0.identity.name.localizedCaseInsensitiveContains("MP10") }
+ if mp10.count == 1 { return .connect(mp10[0].endpoint) }
+ return mp10.isEmpty ? .missing : .ambiguous
+}
+
 final class Bridge: NSObject, NSApplicationDelegate {
  var window: NSWindow!
  let input = NSPopUpButton()
@@ -161,6 +195,13 @@ final class Bridge: NSObject, NSApplicationDelegate {
  var fields: [Int:NSTextField] = [:]
  var sources: [MIDIEndpointRef] = []
  var selected: MIDIEndpointRef = 0
+ var connectionGeneration: UInt = 0
+ var refreshWork: DispatchWorkItem?
+ var reconnectTimer: Timer?
+ var rememberedInput: RememberedInput? {
+  guard let data=defaults.data(forKey:"rememberedInput") else { return nil }
+  return try? JSONDecoder().decode(RememberedInput.self,from:data)
+ }
  var client = MIDIClientRef(), port = MIDIPortRef(), output = MIDIEndpointRef(), feedback = MIDIEndpointRef()
  var hostParser = SysExStream()
  var handshake = MCUHandshake()
@@ -175,19 +216,38 @@ final class Bridge: NSObject, NSApplicationDelegate {
   do {
    try check(MIDIClientCreateWithBlock("MP10 Reason Bridge" as CFString, &client) { [weak self] notification in
     let id = notification.pointee.messageID
-    if id == .msgSetupChanged { DispatchQueue.main.async { self?.refresh(nil) } }
+    if id == .msgSetupChanged || id == .msgObjectAdded || id == .msgObjectRemoved || id == .msgPropertyChanged {
+     let removed = id == .msgObjectRemoved
+      ? UnsafeRawPointer(notification).assumingMemoryBound(to:MIDIObjectAddRemoveNotification.self).pointee.child
+      : 0
+     DispatchQueue.main.async {
+      guard let self=self else { return }
+      if removed != 0 && removed == self.selected { self.disconnectInput() }
+      self.scheduleRefresh()
+     }
+    }
    }, "Create MIDI client")
    try check(MIDISourceCreate(client,"MP10 Reason Bridge" as CFString,&output),"Create virtual output")
-   try check(MIDIInputPortCreateWithBlock(client,"MP10 Input" as CFString,&port) { [weak self] list, _ in
+   try restoreVirtualIdentity(output,key:"virtualOutputID")
+   try check(MIDIInputPortCreateWithBlock(client,"MP10 Input" as CFString,&port) { [weak self] list, ref in
     let bytes = packetBytes(list)
-    DispatchQueue.main.async { self?.receive(bytes) }
+    let generation = ref.map { UInt(bitPattern:$0) } ?? 0
+    DispatchQueue.main.async {
+     guard let self=self,self.connectionGeneration == generation else { return }
+     self.receive(bytes)
+    }
    },"Create MIDI input")
    try check(MIDIDestinationCreateWithBlock(client,"MP10 Reason Bridge Feedback" as CFString,&feedback) { [weak self] list, _ in
     let bytes = packetBytes(list)
     DispatchQueue.main.async { self?.receiveHost(bytes) }
    }, "Create virtual feedback input")
+   try restoreVirtualIdentity(feedback,key:"virtualFeedbackID")
    enabled = true
    refresh(nil)
+   reconnectTimer=Timer.scheduledTimer(withTimeInterval:2,repeats:true) { [weak self] _ in
+    guard let self=self,self.selected == 0,!self.defaults.bool(forKey:"inputAutoConnectDisabled") else { return }
+    self.refresh(nil)
+   }
    append("Ready. Output: MP10 Reason Bridge. Only transport commands are translated.")
   } catch { status.stringValue = error.localizedDescription; append(error.localizedDescription) }
   window.makeKeyAndOrderFront(nil)
@@ -195,7 +255,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
  }
  func buildUI() {
   window = NSWindow(contentRect:NSRect(x:0,y:0,width:710,height:840),styleMask:[.titled,.closable,.miniaturizable],backing:.buffered,defer:false)
-  window.title = "MP10 → Reason Bridge · 1.3"
+  window.title = "MP10 → Reason Bridge · 1.4"
   window.center()
   let view = window.contentView!
   func label(_ text:String,_ x:CGFloat,_ y:CGFloat,_ w:CGFloat) {
@@ -303,25 +363,97 @@ final class Bridge: NSObject, NSApplicationDelegate {
   if MIDIObjectGetStringProperty(endpoint,kMIDIPropertyDisplayName,&value)==noErr,let value=value {return value.takeRetainedValue() as String}
   return "MIDI Input \(endpoint)"
  }
+ func sourceIdentity(_ endpoint:MIDIEndpointRef) -> RememberedInput {
+  func string(_ property:CFString) -> String? {
+   var value:Unmanaged<CFString>?
+   guard MIDIObjectGetStringProperty(endpoint,property,&value) == noErr,let value=value else { return nil }
+   let text=value.takeRetainedValue() as String
+   return text.isEmpty ? nil : text
+  }
+  var id:Int32=0
+  let hasID=MIDIObjectGetIntegerProperty(endpoint,kMIDIPropertyUniqueID,&id) == noErr && id != 0
+  return RememberedInput(uniqueID:hasID ? id : nil,name:name(endpoint),
+                         manufacturer:string(kMIDIPropertyManufacturer),model:string(kMIDIPropertyModel))
+ }
+ func restoreVirtualIdentity(_ endpoint:MIDIEndpointRef,key:String) throws {
+  if let stored=defaults.object(forKey:key) as? NSNumber,stored.int32Value != 0 {
+   try check(MIDIObjectSetIntegerProperty(endpoint,kMIDIPropertyUniqueID,stored.int32Value),
+             "Restore virtual port identity (quit other bridge instances if this fails)")
+  }
+  var id:Int32=0
+  try check(MIDIObjectGetIntegerProperty(endpoint,kMIDIPropertyUniqueID,&id),"Read virtual port identity")
+  defaults.set(id,forKey:key)
+ }
+ func remember(_ endpoint:MIDIEndpointRef) {
+  if let data=try? JSONEncoder().encode(sourceIdentity(endpoint)) { defaults.set(data,forKey:"rememberedInput") }
+  defaults.set(false,forKey:"inputAutoConnectDisabled")
+ }
+ func scheduleRefresh() {
+  refreshWork?.cancel()
+  let work=DispatchWorkItem { [weak self] in self?.refresh(nil) }
+  refreshWork=work
+  DispatchQueue.main.asyncAfter(deadline:.now()+0.15,execute:work)
+ }
+ func connectionStatus(_ message:String) {
+  guard status.stringValue != message else { return }
+  status.stringValue=message;append(message)
+ }
+ func disconnectInput() {
+  connectionGeneration &+= 1
+  if selected != 0 { MIDIPortDisconnectSource(port,selected) }
+  selected=0;parser=Parser();releaseAll()
+ }
+ func connectInput(_ endpoint:MIDIEndpointRef) {
+  disconnectInput()
+  let result=MIDIPortConnectSource(port,endpoint,UnsafeMutableRawPointer(bitPattern:connectionGeneration))
+  if result == noErr {
+   selected=endpoint;remember(endpoint)
+   connectionStatus("Connected: \(name(endpoint)) · MIDI processing active")
+  } else {
+   connectionStatus("Connection failed: \(result). Retrying automatically.")
+  }
+ }
  @objc func refresh(_ sender:Any?) {
   guard enabled else { return }
-  let old=selected
-  sources=(0..<MIDIGetNumberOfSources()).map { MIDIGetSource($0) }.filter { $0 != output && $0 != 0 }
+  sources=(0..<MIDIGetNumberOfSources()).map { MIDIGetSource($0) }.filter {
+   guard $0 != output && $0 != 0 else { return false }
+   var offline:Int32=0
+   return MIDIObjectGetIntegerProperty($0,kMIDIPropertyOffline,&offline) != noErr || offline == 0
+  }
   input.removeAllItems();input.addItem(withTitle:"— Select input —");input.addItems(withTitles:sources.map(name))
-  if let i=sources.firstIndex(of:old) { input.selectItem(at:i+1);return }
-  if old != 0 { MIDIPortDisconnectSource(port,old);selected=0;parser=Parser() }
-  if let i=sources.firstIndex(where:{name($0).localizedCaseInsensitiveContains("MP10")}) {input.selectItem(at:i+1);selectInput()}
-  else {status.stringValue="Select your MP10 MIDI input port."}
+  if selected != 0,let i=sources.firstIndex(of:selected) { input.selectItem(at:i+1);remember(selected);return }
+  if selected != 0 { disconnectInput() }
+  let saved=rememberedInput
+  let choice=chooseInput(sources.map { InputSource(endpoint:$0,identity:sourceIdentity($0)) },
+                         remembered:saved,disabled:defaults.bool(forKey:"inputAutoConnectDisabled"))
+  switch choice {
+  case .connect(let endpoint):
+   if let i=sources.firstIndex(of:endpoint) { input.selectItem(at:i+1) }
+   connectInput(endpoint)
+  case .disabled:
+   connectionStatus("Input disconnected. Select a device to enable automatic reconnection.")
+  case .ambiguous:
+   connectionStatus("Multiple matching MIDI inputs. Select the intended device once.")
+  case .missing:
+   connectionStatus(saved.map { "Waiting for \($0.name) · reconnects automatically" } ?? "Select your MP10 MIDI input port once to remember it.")
+  }
  }
  @objc func selectInput() {
-  if selected != 0 {MIDIPortDisconnectSource(port,selected)}
-  selected=0;parser=Parser()
   let index=input.indexOfSelectedItem-1
-  guard sources.indices.contains(index) else {status.stringValue="No MIDI input connected.";return}
+  guard sources.indices.contains(index) else {
+   disconnectInput()
+   defaults.removeObject(forKey:"rememberedInput")
+   defaults.set(true,forKey:"inputAutoConnectDisabled")
+   connectionStatus("Input disconnected. Select a device to enable automatic reconnection.")
+   return
+  }
   let endpoint=sources[index]
-  let result=MIDIPortConnectSource(port,endpoint,nil)
-  if result == noErr {selected=endpoint;status.stringValue="Connected: \(name(endpoint))";append(status.stringValue)}
-  else {status.stringValue="Connection failed: \(result)";append(status.stringValue)}
+  guard (0..<MIDIGetNumberOfSources()).contains(where:{MIDIGetSource($0) == endpoint}) else {
+   refresh(nil);return
+  }
+  // Save an explicit choice even if the driver is still becoming ready.
+  remember(endpoint)
+  connectInput(endpoint)
  }
  func receive(_ bytes:[UInt8]) {
   guard selected != 0 else {return}
@@ -362,7 +494,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
   if result != noErr {append("Send failed: \(result)")}
  }
  @objc func copyLog() {
-  let report="MP10 Reason Bridge 1.3\nMode: \(modeSelector.titleOfSelectedItem ?? "unknown")\nInput: \(selected == 0 ? "none" : name(selected))\nOS: \(ProcessInfo.processInfo.operatingSystemVersionString)\nRaw entries use monotonic seconds at callback processing time, not hardware packet timestamps. Generated source packets carry current Mach host time.\n\n" + logLines.joined(separator:"\n")
+  let report="MP10 Reason Bridge 1.4\nMode: \(modeSelector.titleOfSelectedItem ?? "unknown")\nInput: \(selected == 0 ? "none" : name(selected))\nOS: \(ProcessInfo.processInfo.operatingSystemVersionString)\nRaw entries use monotonic seconds at callback processing time, not hardware packet timestamps. Generated source packets carry current Mach host time.\n\n" + logLines.joined(separator:"\n")
   NSPasteboard.general.clearContents();NSPasteboard.general.setString(report,forType:.string)
  }
  @objc func clearLog() { logLines=[];log.string="" }
@@ -381,13 +513,33 @@ final class Bridge: NSObject, NSApplicationDelegate {
  }
  func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool {true}
  func applicationWillTerminate(_ notification:Notification) {
+  refreshWork?.cancel();reconnectTimer?.invalidate()
   saveCustomNotes()
-  releaseAll()
+  disconnectInput()
   if client != 0 {MIDIClientDispose(client)}
  }
 }
 
 func selfTest() {
+ let remembered=RememberedInput(uniqueID:42,name:"USB-MIDI",manufacturer:"Kawai",model:"MP10")
+ let serialized=try! JSONEncoder().encode(remembered)
+ let restored=try! JSONDecoder().decode(RememberedInput.self,from:serialized)
+ precondition(restored == remembered)
+ let unrelated=InputSource(endpoint:20,identity:RememberedInput(uniqueID:7,name:"Other MP10",manufacturer:"Other",model:nil))
+ let original=InputSource(endpoint:10,identity:remembered)
+ precondition(chooseInput([original,unrelated],remembered:restored,disabled:false) == .connect(10))
+ precondition(chooseInput([unrelated],remembered:restored,disabled:false) == .missing)
+ let replugged=InputSource(endpoint:99,identity:remembered)
+ precondition(chooseInput([unrelated,replugged],remembered:restored,disabled:false) == .connect(99))
+ let changedID=InputSource(endpoint:101,identity:RememberedInput(uniqueID:123,name:"USB-MIDI",manufacturer:"Kawai",model:"MP10"))
+ precondition(chooseInput([changedID],remembered:restored,disabled:false) == .connect(101))
+ precondition(chooseInput([changedID,InputSource(endpoint:102,identity:changedID.identity)],remembered:restored,disabled:false) == .ambiguous)
+ let wrongDevice=InputSource(endpoint:21,identity:RememberedInput(uniqueID:8,name:"USB-MIDI",manufacturer:"Other",model:"MP10"))
+ precondition(chooseInput([wrongDevice],remembered:restored,disabled:false) == .missing)
+ precondition(chooseInput([original],remembered:restored,disabled:true) == .disabled)
+ precondition(chooseInput([unrelated],remembered:nil,disabled:false) == .connect(20))
+ precondition(chooseInput([original,unrelated],remembered:nil,disabled:true) == .disabled)
+ precondition(chooseInput([InputSource(endpoint:30,identity:RememberedInput(uniqueID:9,name:"MP10 A",manufacturer:nil,model:nil)),unrelated],remembered:nil,disabled:false) == .ambiguous)
  // Exercise the production packet builder, not just the MIDI payload parser.
  let fixtures: [[UInt8]] = [[0x90,0x5E,0x7F],[0x90,0x5E,0],
   [0x90,0x5D,0x7F],[0x90,0x5D,0],[0x90,0x5F,0x7F],
@@ -460,7 +612,7 @@ func selfTest() {
  precondition(h.reply(to:hdr+[2]+serial+[0,0,0,0,0xF7]) == hdr+[4]+serial+[0xF7])
  precondition(h.reply(to:[0xF0,0,0,0x66,0x15,0,0xF7]) == nil)
  precondition(h.reply(to:hdr+[0,1,0xF7]) == nil)
- precondition(h.reply(to:hdr+[0x13,0,0xF7]) == hdr+[0x14]+Array("V1.3 ".utf8)+[0xF7])
+ precondition(h.reply(to:hdr+[0x13,0,0xF7]) == hdr+[0x14]+Array("V1.4 ".utf8)+[0xF7])
  _ = h.reply(to:hdr+[0x63,0xF7])
  precondition(h.awaitingReply)
  _ = h.reply(to:hdr+[0x0F,0x7F,0xF7])
@@ -469,7 +621,7 @@ func selfTest() {
  precondition(stream.feed([0x90,94,127]+Array(hdr.prefix(3))).isEmpty)
  precondition(stream.feed(Array(hdr.dropFirst(3))+[0xF8,0,0xF7]) == [hdr+[0,0xF7]])
  precondition(stream.feed(hdr+[0,0xF7]+hdr+[0x13,0,0xF7]).count == 2)
- print("PASS: Production CoreMIDI packet builder: current nonzero host timestamps, captured UFX transport bytes, SysEx, boundary lengths and delivery errors. MMC parser, MCU mappings, custom notes, monitor mode and handshake tests also passed.")
+ print("PASS: Remembered-input persistence, reconnect matching and ambiguity checks passed. Production CoreMIDI packet builder: current nonzero host timestamps, captured UFX transport bytes, SysEx, boundary lengths and delivery errors. MMC parser, MCU mappings, custom notes, monitor mode and handshake tests also passed.")
 
 }
 func integrationTest() throws {
@@ -484,7 +636,7 @@ func integrationTest() throws {
  bridge.window.orderOut(nil)
  var testClient=MIDIClientRef(), fake=MIDIEndpointRef(), receiver=MIDIPortRef()
  try check(MIDIClientCreateWithBlock("Bridge Test" as CFString,&testClient,nil),"Test client")
- defer {MIDIClientDispose(testClient);MIDIClientDispose(bridge.client)}
+ defer {bridge.reconnectTimer?.invalidate();bridge.refreshWork?.cancel();MIDIClientDispose(testClient);MIDIClientDispose(bridge.client)}
  try check(MIDISourceCreate(testClient,"MP10 Test Source" as CFString,&fake),"Test input")
  var received:[UInt8]=[]
  var receivedTimeStamps:[MIDITimeStamp]=[]
@@ -559,7 +711,33 @@ func integrationTest() throws {
  precondition(received == handshake.header+[3]+handshake.serial+[0xF7])
  bridge.modeSelector.selectItem(at:1);bridge.changeMode()
  precondition(bridge.fields[2]!.stringValue == "77")
- print("PASS: CoreMIDI input, fragmented MMC, MCU and custom note output, mode switching without data loss, feedback without echo, and MCU handshake over virtual ports.")
+ // Remove/recreate the source and verify reconnect actually resumes translation.
+ let saved=bridge.rememberedInput!
+ let previousGeneration=bridge.connectionGeneration
+ try check(MIDIEndpointDispose(fake),"Unplug test source")
+ bridge.refresh(nil)
+ precondition(bridge.selected == 0 && bridge.rememberedInput == saved)
+ try check(MIDISourceCreate(testClient,"MP10 Test Source" as CFString,&fake),"Replug test source")
+ if let id=saved.uniqueID { try check(MIDIObjectSetIntegerProperty(fake,kMIDIPropertyUniqueID,id),"Restore test source identity") }
+ bridge.refresh(nil)
+ precondition(bridge.selected == fake && bridge.connectionGeneration != previousGeneration)
+ bridge.modeSelector.selectItem(at:0);bridge.changeMode()
+ received=[]
+ try check(withSourcePacket([0xF0,0x7F,0x7F,6,2,0xF7]) { MIDIReceived(fake,$0) },"Send after reconnect")
+ let reconnectDeadline=Date().addingTimeInterval(2)
+ while received.count<6 && Date()<reconnectDeadline {RunLoop.current.run(until:Date().addingTimeInterval(0.02))}
+ precondition(received == [0x90,94,127,0x90,94,0])
+ bridge.input.selectItem(at:0);bridge.selectInput();bridge.refresh(nil)
+ precondition(bridge.selected == 0 && bridge.defaults.bool(forKey:"inputAutoConnectDisabled"))
+ // Verify saved virtual IDs survive endpoint recreation, as on an app restart.
+ let outputID=bridge.defaults.integer(forKey:"virtualOutputID")
+ try check(MIDIEndpointDispose(bridge.output),"Recreate virtual output")
+ try check(MIDISourceCreate(bridge.client,"MP10 Reason Bridge" as CFString,&bridge.output),"Restart virtual output")
+ try bridge.restoreVirtualIdentity(bridge.output,key:"virtualOutputID")
+ var restoredID:Int32=0
+ try check(MIDIObjectGetIntegerProperty(bridge.output,kMIDIPropertyUniqueID,&restoredID),"Read restarted output ID")
+ precondition(Int(restoredID) == outputID)
+ print("PASS: CoreMIDI delivery, both modes, preferences, feedback, handshake, unplug/replug with resumed translation, explicit disconnect, and virtual-port identity persistence.")
 }
 if CommandLine.arguments.contains("--self-test") {selfTest()}
 else if CommandLine.arguments.contains("--integration-test") {
