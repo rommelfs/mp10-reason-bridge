@@ -1,10 +1,12 @@
 # MP10 Reason Bridge
 
+<img src="Assets/AppIcon.png" width="128" alt="MP10 Reason Bridge app icon">
+
 A free, native macOS utility that translates the **Kawai MP10's MIDI Machine Control (MMC) transport messages** into **Mackie Control Universal (MCU) button messages** for Reason. A custom MIDI-note mode is also included.
 
 The bridge creates its own virtual MIDI ports. Bome MIDI Translator, an IAC bus, and third-party libraries are not required.
 
-**Status:** the project owner has confirmed that the CoreMIDI timestamp correction works with the Kawai MP10 and Reason 14 on macOS Tahoe. Version **1.4** retains this correction and adds automatic input reconnection. Universal builds, reconnect-selection tests and protocol/packet tests pass; the automated CoreMIDI/GUI integration test remains unavailable in the restricted development environment.
+**Status:** the project owner has confirmed that the CoreMIDI timestamp correction works with the Kawai MP10 and Reason 14 on macOS Tahoe. Version **1.5** retains the timestamp correction and automatic input reconnection, and adds menu-bar background operation. Universal builds, reconnect-selection tests and protocol/packet tests pass; the automated CoreMIDI/GUI integration test remains unavailable in the restricted development environment.
 
 ## Download and requirements
 
@@ -28,6 +30,20 @@ The app uses English throughout the interface, status messages, logs, and test o
 5. Press a transport button. The log should show an `IN` message with the decoded command and an `OUT` message with the generated note.
 
 The MP10's button assignments are configurable under **MIDI EDIT → MMC**; see page 46 of the [MP10 manual](https://www.kawai.de/service/mp10.pdf). The incoming command may therefore differ from the button's printed label. Use the log to see what is actually transmitted.
+
+## Run in the menu bar (v1.5)
+
+The bridge is available from its bridge/play icon in the macOS menu bar.
+
+- **Close or minimize the window:** hides it to the menu bar. MIDI translation and automatic reconnection continue running. The Dock icon is hidden while the window is hidden.
+- **Show Window:** opens the existing window again with its current settings and restores the Dock icon.
+- **Hide Window:** runs in the background without closing the MIDI connections.
+- **Refresh MIDI Inputs:** refreshes the available input devices directly from the menu.
+- **Quit MP10 Reason Bridge:** stops MIDI processing and exits the app.
+
+The menu displays the connection status and current output mode. You can also use **⌘W** or **⌘M** while the bridge window is active to hide it. Reopening the running app from Finder shows its window again. Closing the window no longer quits the bridge; use **Quit** to exit.
+
+The app starts with its window visible. Once your input has been selected, you can hide it and continue controlling Reason in the background. The monochrome menu-bar icon is a vector template so macOS can adapt it to light/dark menu bars; the full-color app icon is used in Finder and the Dock.
 
 ## Automatic reconnection (v1.4)
 
@@ -73,7 +89,7 @@ Avoid multiple active Reason control-surface entries using the same bridge input
 
 ## Updating from an earlier version
 
-Quit the old bridge and Reason. Replace the app with v1.4, start the bridge, then reopen Reason. If Reason retained an unavailable port, re-select the Input and Output listed above. Custom note assignments are preserved.
+Quit the old bridge and Reason. Replace the app with v1.5, start the bridge, then reopen Reason. If Reason retained an unavailable port, re-select the Input and Output listed above. Custom note assignments are preserved.
 
 Versions before the timestamp correction could emit correct MIDI bytes with invalid virtual-source timestamps. Version 1.3 supplies current Mach host time for every generated press, release and handshake packet, as required by [CoreMIDI's `MIDIReceived` contract](https://developer.apple.com/documentation/coremidi/midireceived(_:_:)). This corrected the reported Mackie problem in [issue #1](https://github.com/rommelfs/mp10-reason-bridge/issues/1).
 
@@ -150,7 +166,7 @@ cd mp10-reason-bridge
 ./build.command
 ```
 
-The script compiles both `arm64` and `x86_64` for macOS 13+, combines them into a universal app, applies an ad-hoc signature, and runs the protocol self-tests. The app is written to `MP10 Reason Bridge.app` in the repository directory. It has no package dependencies.
+The script compiles both `arm64` and `x86_64` for macOS 13+, combines them into a universal app, applies an ad-hoc signature, and runs the protocol self-tests. The app is written to `MP10 Reason Bridge.app` in the repository directory. It has no package dependencies. The checked-in artwork is packaged into a ten-representation ICNS app icon and an 18-point vector menu template by `Tools/IconBuilder.swift`, using Apple frameworks. Building does not require image-generation tools or API keys.
 
 ## Diagnostics
 
@@ -172,13 +188,16 @@ On a Mac with a graphical session and CoreMIDI available, run:
 "MP10 Reason Bridge.app/Contents/MacOS/MP10ReasonBridge" --integration-test
 ```
 
-This briefly opens a test window and creates a virtual MP10 and test receiver. It checks packet traversal, both output modes, preservation of custom assignments, feedback without echo, the handshake, source unplug/replug followed by resumed translation, explicit disconnect, and virtual-port identity restoration. It uses a separate temporary preferences domain. It does not replace testing with a physical MP10 and Reason.
+This briefly opens a test window and creates a virtual MP10 and test receiver. It checks packet traversal, both output modes, preservation of custom assignments, feedback without echo, the handshake, source unplug/replug followed by resumed translation, explicit disconnect, virtual-port identity restoration, and MIDI delivery with the window hidden. It uses a separate temporary preferences domain. It does not replace testing with a physical MP10 and Reason.
 
 ## Source files
 
 - `Bridge.swift`: app, stream parsers, translation rules, host handshake, and tests.
 - `Info.plist`: app metadata and minimum macOS version.
-- `build.command`: universal build, signing, and protocol self-test script.
+- `build.command`: universal build, icon packaging, signing, and protocol self-test script.
+- `Tools/IconBuilder.swift`: reproducible ICNS packaging and menu-bar template drawing.
+- `Assets/AppIcon.png`: original generated app-icon artwork.
+- [Icon provenance and final generation prompt](Assets/AppIcon-prompt.txt).
 
 ## References
 

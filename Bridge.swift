@@ -97,7 +97,7 @@ struct MCUHandshake {
    return header + [valid ? 3 : 4] + serial + [0xF7]
   }
   if command == 0x13 && message == header + [0x13, 0, 0xF7] {
-   return header + [0x14] + Array("V1.4 ".utf8) + [0xF7]
+   return header + [0x14] + Array("V1.5 ".utf8) + [0xF7]
   }
   if message == header + [0x0F, 0x7F, 0xF7] { awaitingReply = false }
   return nil
@@ -180,8 +180,12 @@ func chooseInput(_ sources:[InputSource], remembered:RememberedInput?, disabled:
  return mp10.isEmpty ? .missing : .ambiguous
 }
 
-final class Bridge: NSObject, NSApplicationDelegate {
+final class Bridge: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
  var window: NSWindow!
+ var statusItem: NSStatusItem?
+ let menuConnection = NSMenuItem(title:"Starting MIDI…",action:nil,keyEquivalent:"")
+ let menuMode = NSMenuItem(title:"",action:nil,keyEquivalent:"")
+ var menuHide: NSMenuItem?
  let input = NSPopUpButton()
  let channel = NSPopUpButton()
  let modeSelector = NSPopUpButton()
@@ -213,6 +217,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
 
  func applicationDidFinishLaunching(_ notification: Notification) {
   buildUI()
+  setUpMenuBar()
   do {
    try check(MIDIClientCreateWithBlock("MP10 Reason Bridge" as CFString, &client) { [weak self] notification in
     let id = notification.pointee.messageID
@@ -250,12 +255,16 @@ final class Bridge: NSObject, NSApplicationDelegate {
    }
    append("Ready. Output: MP10 Reason Bridge. Only transport commands are translated.")
   } catch { status.stringValue = error.localizedDescription; append(error.localizedDescription) }
-  window.makeKeyAndOrderFront(nil)
-  NSApp.activate(ignoringOtherApps: true)
+  showWindow(nil)
  }
  func buildUI() {
   window = NSWindow(contentRect:NSRect(x:0,y:0,width:710,height:840),styleMask:[.titled,.closable,.miniaturizable],backing:.buffered,defer:false)
-  window.title = "MP10 → Reason Bridge · 1.4"
+  window.title = "MP10 → Reason Bridge · 1.5"
+  window.delegate=self
+  window.isReleasedWhenClosed=false
+  if let button=window.standardWindowButton(.miniaturizeButton) {
+   button.target=self;button.action=#selector(hideWindow(_:))
+  }
   window.center()
   let view = window.contentView!
   func label(_ text:String,_ x:CGFloat,_ y:CGFloat,_ w:CGFloat) {
@@ -297,7 +306,67 @@ final class Bridge: NSObject, NSApplicationDelegate {
   log.isEditable=false;log.isSelectable=true;log.font=NSFont.monospacedSystemFont(ofSize:11,weight:.regular)
   log.autoresizingMask=[.width];log.textContainer?.widthTracksTextView=true
   scroll.documentView=log;view.addSubview(scroll)
-  let menu=NSMenu();let item=NSMenuItem();menu.addItem(item);let appMenu=NSMenu();appMenu.addItem(withTitle:"Quit MP10 Reason Bridge",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q");item.submenu=appMenu;NSApp.mainMenu=menu
+  let menu=NSMenu();let item=NSMenuItem();menu.addItem(item);let appMenu=NSMenu()
+  let show=appMenu.addItem(withTitle:"Show Window",action:#selector(showWindow(_:)),keyEquivalent:"0");show.target=self
+  let hide=appMenu.addItem(withTitle:"Hide to Menu Bar",action:#selector(hideWindow(_:)),keyEquivalent:"w");hide.target=self
+  appMenu.addItem(.separator())
+  let quit=appMenu.addItem(withTitle:"Quit MP10 Reason Bridge",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q");quit.target=NSApp
+  item.submenu=appMenu;NSApp.mainMenu=menu
+  let windowItem=NSMenuItem(title:"Window",action:nil,keyEquivalent:"");menu.addItem(windowItem)
+  let windowMenu=NSMenu(title:"Window")
+  let minimize=windowMenu.addItem(withTitle:"Hide to Menu Bar",action:#selector(hideWindow(_:)),keyEquivalent:"m");minimize.target=self
+  windowItem.submenu=windowMenu
+
+ }
+ func setUpMenuBar() {
+  let item=NSStatusBar.system.statusItem(withLength:NSStatusItem.squareLength)
+  statusItem=item
+  let image=Bundle.main.url(forResource:"MenuBarIcon",withExtension:"pdf").flatMap { NSImage(contentsOf:$0) }
+   ?? NSImage(systemSymbolName:"play.circle",accessibilityDescription:"MP10 Reason Bridge")
+  image?.size=NSSize(width:18,height:18);image?.isTemplate=true
+  item.button?.image=image
+  item.button?.setAccessibilityLabel("MP10 Reason Bridge")
+  let menu=NSMenu();menu.delegate=self;menu.autoenablesItems=false
+  menuConnection.isEnabled=false;menuMode.isEnabled=false
+  menu.addItem(menuConnection);menu.addItem(menuMode);menu.addItem(.separator())
+  let show=menu.addItem(withTitle:"Show Window",action:#selector(showWindow(_:)),keyEquivalent:"");show.target=self
+  let hide=menu.addItem(withTitle:"Hide Window",action:#selector(hideWindow(_:)),keyEquivalent:"");hide.target=self;menuHide=hide
+  let refresh=menu.addItem(withTitle:"Refresh MIDI Inputs",action:#selector(refresh(_:)),keyEquivalent:"");refresh.target=self
+  menu.addItem(.separator())
+  let quit=menu.addItem(withTitle:"Quit MP10 Reason Bridge",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"");quit.target=NSApp
+  item.menu=menu
+  updateStatusMenu()
+ }
+ func updateStatusMenu() {
+  let connection=status.stringValue.isEmpty ? "Starting MIDI…" : status.stringValue
+  menuConnection.title=connection.count > 70 ? String(connection.prefix(67))+"…" : connection
+  menuConnection.toolTip=connection
+  menuMode.title="Mode: \(modeSelector.titleOfSelectedItem ?? "Mackie Control (MCU)")"
+  menuHide?.isEnabled=window?.isVisible ?? false
+  statusItem?.button?.toolTip="MP10 Reason Bridge\n\(connection)\n\(menuMode.title)"
+ }
+ func menuWillOpen(_ menu:NSMenu) { updateStatusMenu() }
+ @objc func showWindow(_ sender:Any?) {
+  NSApp.setActivationPolicy(.regular)
+  if window.isMiniaturized { window.deminiaturize(sender) }
+  window.makeKeyAndOrderFront(sender)
+  NSApp.activate(ignoringOtherApps:true)
+  updateStatusMenu()
+ }
+ @objc func hideWindow(_ sender:Any?) {
+  window.makeFirstResponder(nil)
+  window.orderOut(sender)
+  NSApp.setActivationPolicy(.accessory)
+  updateStatusMenu()
+ }
+ func windowShouldClose(_ sender:NSWindow) -> Bool {
+  hideWindow(sender)
+  return false
+ }
+ func windowDidMiniaturize(_ notification:Notification) { hideWindow(nil) }
+ func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows:Bool) -> Bool {
+  showWindow(nil)
+  return true
  }
  func saveCustomNotes() {
   guard mode == .custom else { return }
@@ -312,6 +381,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
   defaults.set(mode.rawValue,forKey:"outputMode")
   hostParser=SysExStream();handshake=MCUHandshake()
   updateModeUI()
+  updateStatusMenu()
   if mode == .monitor { append("MONITOR ONLY: hardware input is recorded; no MIDI is sent to Reason. Keep the UFX connected directly to Reason.") }
   else { append(mode == .mcu ? "MCU: Channel 1, velocity 127/0. Select Mackie > Control in Reason." : "Custom MIDI note mapping enabled.") }
  }
@@ -396,7 +466,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
  }
  func connectionStatus(_ message:String) {
   guard status.stringValue != message else { return }
-  status.stringValue=message;append(message)
+  status.stringValue=message;append(message);updateStatusMenu()
  }
  func disconnectInput() {
   connectionGeneration &+= 1
@@ -494,7 +564,7 @@ final class Bridge: NSObject, NSApplicationDelegate {
   if result != noErr {append("Send failed: \(result)")}
  }
  @objc func copyLog() {
-  let report="MP10 Reason Bridge 1.4\nMode: \(modeSelector.titleOfSelectedItem ?? "unknown")\nInput: \(selected == 0 ? "none" : name(selected))\nOS: \(ProcessInfo.processInfo.operatingSystemVersionString)\nRaw entries use monotonic seconds at callback processing time, not hardware packet timestamps. Generated source packets carry current Mach host time.\n\n" + logLines.joined(separator:"\n")
+  let report="MP10 Reason Bridge 1.5\nMode: \(modeSelector.titleOfSelectedItem ?? "unknown")\nInput: \(selected == 0 ? "none" : name(selected))\nOS: \(ProcessInfo.processInfo.operatingSystemVersionString)\nRaw entries use monotonic seconds at callback processing time, not hardware packet timestamps. Generated source packets carry current Mach host time.\n\n" + logLines.joined(separator:"\n")
   NSPasteboard.general.clearContents();NSPasteboard.general.setString(report,forType:.string)
  }
  @objc func clearLog() { logLines=[];log.string="" }
@@ -511,8 +581,9 @@ final class Bridge: NSObject, NSApplicationDelegate {
   logLines.append(message);if logLines.count>1000 {logLines.removeFirst(logLines.count-1000)}
   log.string=logLines.joined(separator:"\n");log.scrollToEndOfDocument(nil)
  }
- func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool {true}
+ func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool {false}
  func applicationWillTerminate(_ notification:Notification) {
+  if let item=statusItem { NSStatusBar.system.removeStatusItem(item) };statusItem=nil
   refreshWork?.cancel();reconnectTimer?.invalidate()
   saveCustomNotes()
   disconnectInput()
@@ -612,7 +683,7 @@ func selfTest() {
  precondition(h.reply(to:hdr+[2]+serial+[0,0,0,0,0xF7]) == hdr+[4]+serial+[0xF7])
  precondition(h.reply(to:[0xF0,0,0,0x66,0x15,0,0xF7]) == nil)
  precondition(h.reply(to:hdr+[0,1,0xF7]) == nil)
- precondition(h.reply(to:hdr+[0x13,0,0xF7]) == hdr+[0x14]+Array("V1.4 ".utf8)+[0xF7])
+ precondition(h.reply(to:hdr+[0x13,0,0xF7]) == hdr+[0x14]+Array("V1.5 ".utf8)+[0xF7])
  _ = h.reply(to:hdr+[0x63,0xF7])
  precondition(h.awaitingReply)
  _ = h.reply(to:hdr+[0x0F,0x7F,0xF7])
@@ -636,7 +707,7 @@ func integrationTest() throws {
  bridge.window.orderOut(nil)
  var testClient=MIDIClientRef(), fake=MIDIEndpointRef(), receiver=MIDIPortRef()
  try check(MIDIClientCreateWithBlock("Bridge Test" as CFString,&testClient,nil),"Test client")
- defer {bridge.reconnectTimer?.invalidate();bridge.refreshWork?.cancel();MIDIClientDispose(testClient);MIDIClientDispose(bridge.client)}
+ defer {if let item=bridge.statusItem { NSStatusBar.system.removeStatusItem(item) };bridge.reconnectTimer?.invalidate();bridge.refreshWork?.cancel();MIDIClientDispose(testClient);MIDIClientDispose(bridge.client)}
  try check(MIDISourceCreate(testClient,"MP10 Test Source" as CFString,&fake),"Test input")
  var received:[UInt8]=[]
  var receivedTimeStamps:[MIDITimeStamp]=[]
@@ -711,6 +782,22 @@ func integrationTest() throws {
  precondition(received == handshake.header+[3]+handshake.serial+[0xF7])
  bridge.modeSelector.selectItem(at:1);bridge.changeMode()
  precondition(bridge.fields[2]!.stringValue == "77")
+ // Closing the window must leave CoreMIDI and the selected input alive.
+ bridge.modeSelector.selectItem(at:0);bridge.changeMode()
+ let connectedBeforeHide=bridge.selected
+ bridge.window.performClose(nil)
+ precondition(!bridge.window.isVisible && bridge.selected == connectedBeforeHide && bridge.enabled)
+ precondition(bridge.statusItem != nil)
+ precondition(!bridge.applicationShouldTerminateAfterLastWindowClosed(app))
+ received=[]
+ try check(withSourcePacket([0xF0,0x7F,0x7F,6,1,0xF7]) { MIDIReceived(fake,$0) },"Send while hidden")
+ let hiddenDeadline=Date().addingTimeInterval(2)
+ while received.count<6 && Date()<hiddenDeadline {RunLoop.current.run(until:Date().addingTimeInterval(0.02))}
+ precondition(received == [0x90,93,127,0x90,93,0])
+ bridge.showWindow(nil)
+ precondition(bridge.window.isVisible && bridge.selected == connectedBeforeHide)
+ if let minimize=bridge.window.standardWindowButton(.miniaturizeButton) { minimize.performClick(nil) }
+ precondition(!bridge.window.isVisible && bridge.selected == connectedBeforeHide)
  // Remove/recreate the source and verify reconnect actually resumes translation.
  let saved=bridge.rememberedInput!
  let previousGeneration=bridge.connectionGeneration
@@ -737,7 +824,7 @@ func integrationTest() throws {
  var restoredID:Int32=0
  try check(MIDIObjectGetIntegerProperty(bridge.output,kMIDIPropertyUniqueID,&restoredID),"Read restarted output ID")
  precondition(Int(restoredID) == outputID)
- print("PASS: CoreMIDI delivery, both modes, preferences, feedback, handshake, unplug/replug with resumed translation, explicit disconnect, and virtual-port identity persistence.")
+ print("PASS: CoreMIDI delivery, both modes, preferences, feedback, handshake, unplug/replug with resumed translation, explicit disconnect, virtual-port identity persistence, and MIDI delivery with the window hidden.")
 }
 if CommandLine.arguments.contains("--self-test") {selfTest()}
 else if CommandLine.arguments.contains("--integration-test") {

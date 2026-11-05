@@ -1,4 +1,4 @@
-MP10 Reason Bridge 1.4 — optional MIDI diagnostics
+MP10 Reason Bridge 1.5 — optional MIDI diagnostics
 
 Version 1.3 includes the CoreMIDI timestamp correction confirmed working by
 the project owner with MP10, Reason 14 and macOS Tahoe. Diagnostics are
@@ -19,7 +19,7 @@ transport overrides when testing the native Mackie configuration.
 
 UPGRADING
 
-Quit the older bridge and Reason, replace the app with v1.4, start the bridge,
+Quit the older bridge and Reason, replace the app with v1.5, start the bridge,
 then reopen Reason. Re-select the current ports in Reason if necessary.
 Custom MIDI-note assignments are preserved.
 
@@ -34,6 +34,14 @@ Choosing the empty Select input entry deliberately disables auto-reconnect.
 Virtual Reason port IDs are retained from v1.4 onward. A first-time upgrade
 may require one port re-selection in Reason. Quit other bridge instances
 if a persisted virtual port identity cannot be restored.
+
+MENU-BAR BACKGROUND MODE
+
+Closing or minimizing the main window hides it to the menu bar. MIDI input,
+translation and reconnect monitoring continue. Use the bridge/play menu-bar
+icon > Show Window to reopen it. Choose Quit MP10 Reason Bridge to stop it.
+The menu shows connection status and mode and provides Refresh MIDI Inputs.
+The Dock icon is hidden in background mode and returns when the window opens.
 
 RAW MIDI LOG
 
@@ -85,7 +93,8 @@ reference payloads, SysEx, size limits and delivery errors) and protocol logic.
 --integration-test requires a macOS graphical session and available CoreMIDI;
 it verifies virtual-port delivery, both output modes, preferences, feedback,
 handshake, received nonzero timestamps, input replug with resumed translation,
-explicit disconnect and virtual-port identity restoration. That automated integration test
+explicit disconnect, virtual-port identity restoration and MIDI delivery
+while the window is hidden. That automated integration test
 is unavailable in the restricted development environment; the physical
 Reason setup was confirmed by the project owner.
 
